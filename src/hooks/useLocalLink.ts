@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActiveCallState,
   ChatMessage,
   ConnectedPeer,
   DeviceInfo,
@@ -7,6 +8,7 @@ import {
   PeerConnectionStatus,
   SignalMessage,
 } from "../types";
+import { VoiceCallService } from "../services/callService";
 import {
   detectDeviceEnvironment,
   getDeviceInfo,
@@ -51,6 +53,9 @@ export function useLocalLink() {
   // Incoming connection requests
   const [incomingRequests, setIncomingRequests] = useState<IncomingConnectionRequest[]>([]);
 
+  // Active Voice Call state
+  const [activeCall, setActiveCall] = useState<ActiveCallState | null>(null);
+
   // Sound preference
   const [soundEnabled, setSoundEnabledState] = useState<boolean>(() => getStoredSoundPreference());
 
@@ -63,6 +68,7 @@ export function useLocalLink() {
   const signalingClientRef = useRef<SignalingClient | null>(null);
   const webrtcManagerRef = useRef<WebRTCManager | null>(null);
   const messagingServiceRef = useRef<MessagingService | null>(null);
+  const voiceCallServiceRef = useRef<VoiceCallService | null>(null);
 
   // Save peers whenever the map changes
   useEffect(() => {
@@ -105,7 +111,17 @@ export function useLocalLink() {
         });
       },
       onPacketReceived: (peerId: string, packet: any) => {
-        messagingServiceRef.current?.handleIncomingPacket(peerId, packet);
+        if (
+          packet.type === "call_request" ||
+          packet.type === "call_accept" ||
+          packet.type === "call_reject" ||
+          packet.type === "call_end" ||
+          packet.type === "call_mute_toggle"
+        ) {
+          voiceCallServiceRef.current?.handleCallPacket(packet);
+        } else {
+          messagingServiceRef.current?.handleIncomingPacket(peerId, packet);
+        }
       },
       onSignalNeeded: (toDeviceId: string, type: any, data: any) => {
         signalingClientRef.current?.sendSignal(toDeviceId, type, data);
@@ -206,6 +222,19 @@ export function useLocalLink() {
     });
     messagingServiceRef.current = messaging;
 
+    // Initialize Voice Call Service
+    const voiceCall = new VoiceCallService(deviceInfo.deviceId, deviceInfo.deviceName, {
+      onCallStateChange: (state) => {
+        setActiveCall(state);
+      },
+      sendPacket: (peerId, packet) => {
+        return webrtc.sendDataPacket(peerId, packet);
+      },
+      sendSignal: (toDeviceId, type, data) => {
+        signaling.sendSignal(toDeviceId, type, data);
+      },
+    });
+    voiceCallServiceRef.current = voiceCall;
 
     // Register our persistent code on signaling server
     const registerDevice = async () => {
@@ -589,6 +618,73 @@ export function useLocalLink() {
     }
   };
 
+  // Send a voice message to active peer
+  const sendVoiceMessage = async (
+    peerId: string,
+    audioBlob: Blob,
+    duration: number,
+    waveformData?: number[]
+  ): Promise<ChatMessage | null> => {
+    if (!messagingServiceRef.current) return null;
+
+    try {
+      const msg = await messagingServiceRef.current.sendVoiceMessage(
+        peerId,
+        audioBlob,
+        duration,
+        waveformData
+      );
+      setChatHistories((prev) => {
+        const next = new Map<string, ChatMessage[]>(prev);
+        const list = next.get(peerId) || [];
+        next.set(peerId, [...list, msg]);
+        return next;
+      });
+
+      setPeers((prev) => {
+        const next = new Map<string, ConnectedPeer>(prev);
+        const peer = next.get(peerId);
+        if (peer) {
+          next.set(peerId, { ...peer, lastMessage: msg, lastSeen: Date.now() });
+        }
+        return next;
+      });
+
+      return msg;
+    } catch (err) {
+      console.error("Failed to send voice message:", err);
+      return null;
+    }
+  };
+
+  // Start outgoing voice call
+  const startVoiceCall = async (peerId: string): Promise<boolean> => {
+    const peer = peers.get(peerId);
+    if (!peer || !voiceCallServiceRef.current) return false;
+    return await voiceCallServiceRef.current.startCall(peerId, peer.deviceName, peer.deviceType);
+  };
+
+  // Accept incoming voice call
+  const acceptVoiceCall = async (): Promise<boolean> => {
+    if (!voiceCallServiceRef.current) return false;
+    return await voiceCallServiceRef.current.acceptCall();
+  };
+
+  // Reject incoming voice call
+  const rejectVoiceCall = () => {
+    voiceCallServiceRef.current?.rejectCall();
+  };
+
+  // End active or outgoing call
+  const endVoiceCall = () => {
+    voiceCallServiceRef.current?.endCall();
+  };
+
+  // Toggle local mic mute
+  const toggleVoiceCallMute = () => {
+    voiceCallServiceRef.current?.toggleMute();
+  };
+
   // Cancel ongoing file transfer
   const cancelFileTransfer = (peerId: string, fileId: string) => {
     messagingServiceRef.current?.cancelFileTransfer(peerId, fileId);
@@ -658,6 +754,7 @@ export function useLocalLink() {
     activeChatMessages,
     isTargetTyping,
     incomingRequests,
+    activeCall,
     soundEnabled,
     setSoundEnabled,
     updateDeviceName,
@@ -670,6 +767,12 @@ export function useLocalLink() {
     disconnectPeer,
     sendMessage,
     sendFile,
+    sendVoiceMessage,
+    startVoiceCall,
+    acceptVoiceCall,
+    rejectVoiceCall,
+    endVoiceCall,
+    toggleVoiceCallMute,
     cancelFileTransfer,
     sendTypingIndicator,
     openChatWithPeer,

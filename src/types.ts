@@ -57,6 +57,16 @@ export interface FileTransferItem {
   speed?: string;
   error?: string;
   isMine?: boolean;
+  textContent?: string;
+}
+
+export interface VoiceMessageItem {
+  id: string;
+  url: string;
+  duration: number; // in seconds
+  mimeType: string;
+  size: number;
+  waveformData?: number[];
 }
 
 export interface ChatMessage {
@@ -67,8 +77,29 @@ export interface ChatMessage {
   timestamp: number;
   status: "sending" | "sent" | "delivered" | "read" | "failed";
   isMine: boolean;
-  type?: "text" | "file";
+  type?: "text" | "file" | "voice";
   file?: FileTransferItem;
+  voice?: VoiceMessageItem;
+}
+
+export type CallStatus =
+  | "idle"
+  | "outgoing_calling"
+  | "incoming_ringing"
+  | "connected"
+  | "ended";
+
+export interface ActiveCallState {
+  callId: string;
+  peerId: string;
+  peerName: string;
+  peerDeviceType?: DeviceType;
+  status: CallStatus;
+  isCaller: boolean;
+  startTime?: number;
+  duration: number; // in seconds
+  isMuted: boolean;
+  isRemoteMuted?: boolean;
 }
 
 export type DataPacketType =
@@ -83,6 +114,12 @@ export type DataPacketType =
   | "file_complete"
   | "file_ack"
   | "file_cancel"
+  | "voice_message"
+  | "call_request"
+  | "call_accept"
+  | "call_reject"
+  | "call_end"
+  | "call_mute_toggle"
   | "disconnect_notify";
 
 export interface DataPacket {

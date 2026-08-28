@@ -13,6 +13,9 @@ interface IncomingTransfer {
   receivedChunks: Map<number, string>; // chunkIndex -> base64 data
   startTime: number;
   lastProgressUpdate: number;
+  isVoice?: boolean;
+  duration?: number;
+  waveformData?: number[];
 }
 
 export class FileTransferService {
@@ -109,12 +112,15 @@ export class FileTransferService {
    */
   public async sendFile(
     toPeerId: string,
-    file: File,
+    file: File | Blob,
+    filename?: string,
+    metadata?: { isVoice?: boolean; duration?: number; waveformData?: number[] },
     onProgress?: (progress: number, speed: string) => void
   ): Promise<{ fileItem: FileTransferItem; messageId: string }> {
     const fileId = `file_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const actualName = filename || (file as File).name || (metadata?.isVoice ? "Voice Message.webm" : "File");
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-    const mimeType = file.type || "application/octet-stream";
+    const mimeType = file.type || (metadata?.isVoice ? "audio/webm" : "application/octet-stream");
 
     // Local object URL for instant preview / download
     const localUrl = URL.createObjectURL(file);
@@ -122,7 +128,7 @@ export class FileTransferService {
 
     const fileItem: FileTransferItem = {
       id: fileId,
-      name: file.name,
+      name: actualName,
       size: file.size,
       mimeType,
       totalChunks,
@@ -144,11 +150,14 @@ export class FileTransferService {
       senderName: this.myDeviceName,
       payload: {
         fileId,
-        name: file.name,
+        name: actualName,
         size: file.size,
         mimeType,
         totalChunks,
         chunkSize: CHUNK_SIZE,
+        isVoice: metadata?.isVoice,
+        duration: metadata?.duration,
+        waveformData: metadata?.waveformData,
       },
     };
 
@@ -217,7 +226,7 @@ export class FileTransferService {
       this.onFileProgressCallback?.(toPeerId, fileId, 100, "completed", localUrl);
       playFileTransferCompleteSound();
     })().catch((err) => {
-      console.error(`File transfer error for ${file.name}:`, err);
+      console.error(`File transfer error for ${actualName}:`, err);
       this.activeOutgoingTransfers.delete(fileId);
       this.onFileProgressCallback?.(toPeerId, fileId, 0, "error");
     });
@@ -257,7 +266,7 @@ export class FileTransferService {
   public handleFilePacket(peerId: string, packet: DataPacket) {
     switch (packet.type) {
       case "file_start": {
-        const { fileId, name, size, mimeType, totalChunks } = packet.payload;
+        const { fileId, name, size, mimeType, totalChunks, isVoice, duration, waveformData } = packet.payload;
         this.incomingTransfers.set(fileId, {
           fileId,
           name,
@@ -267,27 +276,43 @@ export class FileTransferService {
           receivedChunks: new Map<number, string>(),
           startTime: Date.now(),
           lastProgressUpdate: Date.now(),
+          isVoice,
+          duration,
+          waveformData,
         });
 
         const incomingMsg: ChatMessage = {
           id: fileId,
           fromDeviceId: packet.senderId,
           toDeviceId: this.myDeviceId,
-          text: `Sent a file: ${name}`,
+          text: isVoice ? "Voice message" : `Sent a file: ${name}`,
           timestamp: packet.timestamp,
           status: "delivered",
           isMine: false,
-          type: "file",
-          file: {
-            id: fileId,
-            name,
-            size,
-            mimeType,
-            totalChunks,
-            progress: 0,
-            status: "transferring",
-            isMine: false,
-          },
+          type: isVoice ? "voice" : "file",
+          ...(isVoice
+            ? {
+                voice: {
+                  id: fileId,
+                  url: "",
+                  duration: duration || 1,
+                  mimeType: mimeType || "audio/webm",
+                  size,
+                  waveformData,
+                },
+              }
+            : {
+                file: {
+                  id: fileId,
+                  name,
+                  size,
+                  mimeType,
+                  totalChunks,
+                  progress: 0,
+                  status: "transferring",
+                  isMine: false,
+                },
+              }),
         };
 
         this.onFileReceivedCallback?.(peerId, incomingMsg);
@@ -332,8 +357,30 @@ export class FileTransferService {
         const blobUrl = URL.createObjectURL(blob);
         this.objectUrls.set(fileId, blobUrl);
 
-        this.incomingTransfers.delete(fileId);
+        // If voice note, update voice message
+        if (transfer.isVoice) {
+          const voiceMsg: ChatMessage = {
+            id: fileId,
+            fromDeviceId: packet.senderId,
+            toDeviceId: this.myDeviceId,
+            text: "Voice message",
+            timestamp: packet.timestamp,
+            status: "delivered",
+            isMine: false,
+            type: "voice",
+            voice: {
+              id: fileId,
+              url: blobUrl,
+              duration: transfer.duration || 1,
+              mimeType: transfer.mimeType,
+              size: transfer.size,
+              waveformData: transfer.waveformData,
+            },
+          };
+          this.onFileReceivedCallback?.(peerId, voiceMsg);
+        }
 
+        this.incomingTransfers.delete(fileId);
         this.onFileProgressCallback?.(peerId, fileId, 100, "completed", blobUrl);
         playFileTransferCompleteSound();
         break;

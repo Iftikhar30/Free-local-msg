@@ -10,6 +10,7 @@ import { Navbar } from "./components/Navbar";
 import { QRCodeModal } from "./components/QRCodeModal";
 import { RegenerateCodeModal } from "./components/RegenerateCodeModal";
 import { SettingsScreen } from "./components/SettingsScreen";
+import { VoiceCallModal } from "./components/VoiceCallModal";
 import { useLocalLink } from "./hooks/useLocalLink";
 import { AppTab } from "./types";
 
@@ -30,6 +31,7 @@ export default function App() {
     activeChatMessages,
     isTargetTyping,
     incomingRequests,
+    activeCall,
     soundEnabled,
     setSoundEnabled,
     updateDeviceName,
@@ -42,6 +44,12 @@ export default function App() {
     disconnectPeer,
     sendMessage,
     sendFile,
+    sendVoiceMessage,
+    startVoiceCall,
+    acceptVoiceCall,
+    rejectVoiceCall,
+    endVoiceCall,
+    toggleVoiceCallMute,
     cancelFileTransfer,
     sendTypingIndicator,
     openChatWithPeer,
@@ -125,6 +133,8 @@ export default function App() {
             onSelectPeer={openChatWithPeer}
             onSendMessage={sendMessage}
             onSendFile={sendFile}
+            onSendVoiceMessage={sendVoiceMessage}
+            onStartVoiceCall={startVoiceCall}
             onCancelFileTransfer={cancelFileTransfer}
             onSendTypingIndicator={sendTypingIndicator}
             onDisconnectPeer={disconnectPeer}
@@ -191,6 +201,17 @@ export default function App() {
         onAccept={acceptConnectionRequest}
         onReject={rejectConnectionRequest}
       />
+
+      {/* Direct P2P Voice Call Interface */}
+      {activeCall && (
+        <VoiceCallModal
+          call={activeCall}
+          onAccept={acceptVoiceCall}
+          onReject={rejectVoiceCall}
+          onEnd={endVoiceCall}
+          onToggleMute={toggleVoiceCallMute}
+        />
+      )}
     </div>
   );
 }

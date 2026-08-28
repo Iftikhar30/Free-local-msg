@@ -121,7 +121,7 @@ export class MessagingService {
     file: File,
     onProgress?: (progress: number, speed: string) => void
   ): Promise<ChatMessage> {
-    const { fileItem, messageId } = await this.fileTransfer.sendFile(toPeerId, file, onProgress);
+    const { fileItem, messageId } = await this.fileTransfer.sendFile(toPeerId, file, file.name, undefined, onProgress);
 
     const chatMsg: ChatMessage = {
       id: messageId,
@@ -133,6 +133,46 @@ export class MessagingService {
       isMine: true,
       type: "file",
       file: fileItem,
+    };
+
+    this.saveMessageToHistory(toPeerId, chatMsg);
+    return chatMsg;
+  }
+
+  /**
+   * Send a voice message note to peer over WebRTC
+   */
+  public async sendVoiceMessage(
+    toPeerId: string,
+    audioBlob: Blob,
+    duration: number,
+    waveformData?: number[]
+  ): Promise<ChatMessage> {
+    const filename = `voice_note_${Date.now()}.webm`;
+    const { fileItem, messageId } = await this.fileTransfer.sendFile(
+      toPeerId,
+      audioBlob,
+      filename,
+      { isVoice: true, duration, waveformData }
+    );
+
+    const chatMsg: ChatMessage = {
+      id: messageId,
+      fromDeviceId: this.myDeviceId,
+      toDeviceId: toPeerId,
+      text: "Voice message",
+      timestamp: Date.now(),
+      status: "sent",
+      isMine: true,
+      type: "voice",
+      voice: {
+        id: messageId,
+        url: fileItem.url || "",
+        duration,
+        mimeType: audioBlob.type || "audio/webm",
+        size: audioBlob.size,
+        waveformData,
+      },
     };
 
     this.saveMessageToHistory(toPeerId, chatMsg);

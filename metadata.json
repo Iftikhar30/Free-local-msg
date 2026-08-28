@@ -1,6 +1,6 @@
 {
   "name": "LocalLink",
   "description": "Peer-to-peer multi-device direct messaging and connection app powered by WebRTC, live QR scanning, and Vercel-compatible signaling.",
-  "requestFramePermissions": ["camera"],
+  "requestFramePermissions": ["camera", "microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

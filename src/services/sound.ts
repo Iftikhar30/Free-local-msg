@@ -152,3 +152,182 @@ export function playFileTransferCompleteSound(): void {
     });
   } catch (e) {}
 }
+
+let activeRingtoneInterval: any = null;
+
+/**
+ * Incoming Voice Call Ringtone Loop (repeating melodious bell)
+ */
+export function startIncomingCallRingtone(): void {
+  stopCallAudio();
+  if (!getStoredSoundPreference()) return;
+
+  const playChord = () => {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      // Melodic phone ring pattern: E5 (659Hz) -> G#5 (830Hz) -> B5 (987Hz)
+      const freqs = [659.25, 830.61, 987.77, 1318.5];
+      freqs.forEach((f, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(f, now + idx * 0.1);
+        gain.gain.setValueAtTime(0, now + idx * 0.1);
+        gain.gain.linearRampToValueAtTime(0.15, now + idx * 0.1 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.1 + 0.4);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + idx * 0.1);
+        osc.stop(now + idx * 0.1 + 0.45);
+      });
+    } catch (e) {}
+  };
+
+  playChord();
+  activeRingtoneInterval = setInterval(playChord, 2200);
+}
+
+/**
+ * Outgoing Calling Tone Loop (dual-tone standard ringback)
+ */
+export function startOutgoingRingback(): void {
+  stopCallAudio();
+  if (!getStoredSoundPreference()) return;
+
+  const playTone = () => {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc1.type = "sine";
+      osc2.type = "sine";
+      osc1.frequency.setValueAtTime(440, now);
+      osc2.frequency.setValueAtTime(480, now);
+
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.08, now + 0.05);
+      gain.gain.setValueAtTime(0.08, now + 1.2);
+      gain.gain.linearRampToValueAtTime(0.001, now + 1.3);
+
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc1.start(now);
+      osc2.start(now);
+      osc1.stop(now + 1.35);
+      osc2.stop(now + 1.35);
+    } catch (e) {}
+  };
+
+  playTone();
+  activeRingtoneInterval = setInterval(playTone, 3500);
+}
+
+export function stopCallAudio(): void {
+  if (activeRingtoneInterval) {
+    clearInterval(activeRingtoneInterval);
+    activeRingtoneInterval = null;
+  }
+}
+
+/**
+ * Call Connected chime
+ */
+export function playCallConnectedSound(): void {
+  stopCallAudio();
+  if (!getStoredSoundPreference()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(440, now);
+    osc.frequency.exponentialRampToValueAtTime(880, now + 0.15);
+    gain.gain.setValueAtTime(0.1, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.36);
+  } catch (e) {}
+}
+
+/**
+ * Call Ended / Declined tone (descending beep)
+ */
+export function playCallEndedSound(): void {
+  stopCallAudio();
+  if (!getStoredSoundPreference()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    [400, 300].forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, now + idx * 0.12);
+      gain.gain.setValueAtTime(0.1, now + idx * 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.12 + 0.18);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + idx * 0.12);
+      osc.stop(now + idx * 0.12 + 0.2);
+    });
+  } catch (e) {}
+}
+
+/**
+ * Voice Note Start Recording Pop
+ */
+export function playRecordStartSound(): void {
+  if (!getStoredSoundPreference()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(600, now);
+    osc.frequency.exponentialRampToValueAtTime(900, now + 0.08);
+    gain.gain.setValueAtTime(0.1, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.13);
+  } catch (e) {}
+}
+
+/**
+ * Voice Note Stop Recording Pop
+ */
+export function playRecordStopSound(): void {
+  if (!getStoredSoundPreference()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(800, now);
+    osc.frequency.exponentialRampToValueAtTime(450, now + 0.08);
+    gain.gain.setValueAtTime(0.1, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.13);
+  } catch (e) {}
+}

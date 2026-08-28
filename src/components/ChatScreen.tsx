@@ -6,6 +6,7 @@ import {
   CheckCheck,
   Copy,
   Download,
+  Eye,
   File,
   FileArchive,
   FileCode,
@@ -15,20 +16,26 @@ import {
   Image as ImageIcon,
   Laptop,
   MessageSquare,
+  Mic,
   Music,
   Paperclip,
+  Phone,
   Plus,
-  Radio,
   Send,
   ShieldCheck,
   Smartphone,
+  Square,
   Tablet,
+  Trash2,
   Unplug,
   UploadCloud,
   X,
 } from "lucide-react";
 import { FileTransferService } from "../services/fileTransfer";
+import { VoiceRecorderService } from "../services/voiceRecorder";
 import { ChatMessage, ConnectedPeer, FileTransferItem } from "../types";
+import { FilePreviewModal } from "./FilePreviewModal";
+import { VoiceMessagePlayer } from "./VoiceMessagePlayer";
 
 interface ChatScreenProps {
   peers: ConnectedPeer[];
@@ -38,6 +45,8 @@ interface ChatScreenProps {
   onSelectPeer: (peerId: string) => void;
   onSendMessage: (peerId: string, text: string) => boolean;
   onSendFile: (peerId: string, file: File) => Promise<any>;
+  onSendVoiceMessage?: (peerId: string, blob: Blob, duration: number, waveform?: number[]) => Promise<any>;
+  onStartVoiceCall?: (peerId: string) => void;
   onCancelFileTransfer?: (peerId: string, fileId: string) => void;
   onSendTypingIndicator: (peerId: string, isTyping: boolean) => void;
   onDisconnectPeer: (peerId: string) => void;
@@ -52,6 +61,8 @@ export function ChatScreen({
   onSelectPeer,
   onSendMessage,
   onSendFile,
+  onSendVoiceMessage,
+  onStartVoiceCall,
   onCancelFileTransfer,
   onSendTypingIndicator,
   onDisconnectPeer,
@@ -60,7 +71,14 @@ export function ChatScreen({
   const [inputText, setInputText] = useState("");
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
-  const [previewImageModal, setPreviewImageModal] = useState<{ url: string; name: string } | null>(null);
+  const [previewFile, setPreviewFile] = useState<FileTransferItem | null>(null);
+
+  // Voice recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordDuration, setRecordDuration] = useState(0);
+  const [micVolume, setMicVolume] = useState(20);
+  const voiceRecorderRef = useRef<VoiceRecorderService | null>(null);
+  const recordIntervalRef = useRef<any>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -131,6 +149,67 @@ export function ChatScreen({
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
+  };
+
+  // Voice Recording Handlers
+  const handleStartRecording = async () => {
+    if (!activePeer || activePeer.status !== "connected") {
+      alert("Connect to a peer before recording voice messages.");
+      return;
+    }
+
+    const recorder = new VoiceRecorderService();
+    voiceRecorderRef.current = recorder;
+
+    const success = await recorder.startRecording((vol) => {
+      setMicVolume(vol);
+    });
+
+    if (success) {
+      setIsRecording(true);
+      setRecordDuration(0);
+      recordIntervalRef.current = setInterval(() => {
+        setRecordDuration((prev) => prev + 1);
+      }, 1000);
+    }
+  };
+
+  const handleStopAndSendVoice = async () => {
+    if (!voiceRecorderRef.current || !activePeer) return;
+
+    if (recordIntervalRef.current) {
+      clearInterval(recordIntervalRef.current);
+      recordIntervalRef.current = null;
+    }
+
+    const result = await voiceRecorderRef.current.stopRecording();
+    setIsRecording(false);
+    setRecordDuration(0);
+
+    if (result && onSendVoiceMessage) {
+      await onSendVoiceMessage(
+        activePeer.deviceId,
+        result.blob,
+        result.duration,
+        result.waveformData
+      );
+    }
+  };
+
+  const handleCancelVoiceRecording = () => {
+    if (recordIntervalRef.current) {
+      clearInterval(recordIntervalRef.current);
+      recordIntervalRef.current = null;
+    }
+    voiceRecorderRef.current?.cancelRecording();
+    setIsRecording(false);
+    setRecordDuration(0);
+  };
+
+  const formatTimer = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
   };
 
   // Drag and drop handlers
@@ -213,7 +292,7 @@ export function ChatScreen({
     if (["xlsx", "xls", "csv"].includes(ext)) {
       return <FileSpreadsheet className="w-5 h-5 text-emerald-500" />;
     }
-    if (["js", "ts", "jsx", "tsx", "html", "css", "py", "json", "java", "c", "cpp"].includes(ext)) {
+    if (["js", "ts", "jsx", "tsx", "html", "css", "py", "json", "java", "c", "cpp", "md", "txt", "sh", "sql"].includes(ext)) {
       return <FileCode className="w-5 h-5 text-cyan-500" />;
     }
     return <File className="w-5 h-5 text-slate-500" />;
@@ -222,6 +301,11 @@ export function ChatScreen({
   const isImageFile = (fileItem: FileTransferItem) => {
     const ext = fileItem.name.split(".").pop()?.toLowerCase() || "";
     return fileItem.mimeType.startsWith("image/") || ["jpg", "jpeg", "png", "gif", "webp", "svg"].includes(ext);
+  };
+
+  const isVideoFile = (fileItem: FileTransferItem) => {
+    const ext = fileItem.name.split(".").pop()?.toLowerCase() || "";
+    return fileItem.mimeType.startsWith("video/") || ["mp4", "webm", "mov"].includes(ext);
   };
 
   return (
@@ -258,13 +342,8 @@ export function ChatScreen({
         <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/60 p-1.5 space-y-0.5">
           {peers.length === 0 ? (
             <div className="p-6 text-center text-xs text-slate-400 dark:text-slate-500">
-              No devices connected yet.
-              <button
-                onClick={onOpenConnectModal}
-                className="mt-2 block mx-auto text-indigo-600 dark:text-indigo-400 font-semibold hover:underline text-xs cursor-pointer"
-              >
-                + Connect Device
-              </button>
+              <p>No connected peers</p>
+              <p className="mt-1 text-[11px]">Click + to link a device with a 6-digit code</p>
             </div>
           ) : (
             peers.map((peer) => {
@@ -274,19 +353,18 @@ export function ChatScreen({
               return (
                 <div
                   key={peer.deviceId}
-                  id={`chat-peer-item-${peer.deviceId}`}
                   onClick={() => onSelectPeer(peer.deviceId)}
-                  className={`p-2.5 rounded-xl cursor-pointer transition-all flex items-center gap-2.5 ${
+                  className={`flex items-center gap-2.5 p-2.5 rounded-xl cursor-pointer transition-all ${
                     isSelected
                       ? "bg-indigo-600 text-white shadow-xs"
-                      : "hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200"
+                      : "hover:bg-slate-100 dark:hover:bg-slate-800/70 text-slate-700 dark:text-slate-200"
                   }`}
                 >
                   <div
-                    className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                    className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
                       isSelected
                         ? "bg-white/20 text-white"
-                        : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+                        : "bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400"
                     }`}
                   >
                     {getDeviceIcon(peer)}
@@ -295,7 +373,7 @@ export function ChatScreen({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
                       <h4
-                        className={`text-xs font-bold truncate ${
+                        className={`text-xs font-semibold truncate ${
                           isSelected ? "text-white" : "text-slate-900 dark:text-white"
                         }`}
                       >
@@ -405,10 +483,23 @@ export function ChatScreen({
               </div>
 
               {/* Chat Header Actions */}
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-2">
+                {/* Voice Call Button */}
+                {activePeer.status === "connected" && onStartVoiceCall && (
+                  <button
+                    id="start-voice-call-header-btn"
+                    onClick={() => onStartVoiceCall(activePeer.deviceId)}
+                    className="flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 text-xs font-semibold shadow-2xs transition-all active:scale-95 cursor-pointer"
+                    title="Start P2P Voice Call / ভয়েস কল"
+                  >
+                    <Phone className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    <span>Call</span>
+                  </button>
+                )}
+
                 <button
                   onClick={() => onDisconnectPeer(activePeer.deviceId)}
-                  className="flex items-center gap-1 py-1 px-2.5 rounded-lg border border-rose-200 dark:border-rose-900/60 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 text-xs font-semibold transition-colors cursor-pointer"
+                  className="flex items-center gap-1 py-1.5 px-2.5 rounded-xl border border-rose-200 dark:border-rose-900/60 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50 text-xs font-semibold transition-colors cursor-pointer"
                   title="Disconnect Peer"
                 >
                   <Unplug className="w-3 h-3" />
@@ -429,7 +520,7 @@ export function ChatScreen({
                 <div className="text-center py-10 text-slate-400 text-xs">
                   <p>Start a conversation or send a file to {activePeer.deviceName}.</p>
                   <p className="mt-0.5 text-[11px] text-slate-500">
-                    Use the paperclip button or drag & drop files here.
+                    Use the paperclip for files, mic for voice notes, or phone for voice calling.
                   </p>
                 </div>
               ) : (
@@ -438,9 +529,9 @@ export function ChatScreen({
                     key={msg.id}
                     className={`flex flex-col group ${msg.isMine ? "items-end" : "items-start"}`}
                   >
-                    <div className="flex items-end gap-1.5 max-w-[88%] sm:max-w-[75%]">
-                      {/* Message Bubble (Text or File) */}
-                      {msg.type === "file" && msg.file ? (
+                    <div className="flex items-end gap-1.5 max-w-[90%] sm:max-w-[78%]">
+                      {/* 1. Voice Message Bubble */}
+                      {msg.type === "voice" && msg.voice ? (
                         <div
                           className={`relative p-3 rounded-2xl text-xs break-words shadow-2xs border transition-all ${
                             msg.isMine
@@ -448,37 +539,81 @@ export function ChatScreen({
                               : "bg-white dark:bg-slate-800 text-slate-900 dark:text-white border-slate-200 dark:border-slate-700/80 rounded-bl-xs"
                           }`}
                         >
-                          {/* If Image and Ready, show preview thumbnail */}
+                          <VoiceMessagePlayer voice={msg.voice} isMine={msg.isMine} />
+                          <div
+                            className={`mt-1 flex items-center justify-end gap-1 text-[9px] font-mono ${
+                              msg.isMine ? "text-indigo-200" : "text-slate-400"
+                            }`}
+                          >
+                            <span>{formatMessageTime(msg.timestamp)}</span>
+                            {msg.isMine && (
+                              <span>
+                                {msg.status === "sending" && <span className="text-indigo-300">⋯</span>}
+                                {msg.status === "sent" && <Check className="w-2.5 h-2.5 text-indigo-200" />}
+                                {(msg.status === "delivered" || msg.status === "read") && (
+                                  <CheckCheck
+                                    className={`w-3 h-3 ${
+                                      msg.status === "read" ? "text-emerald-300" : "text-indigo-200"
+                                    }`}
+                                  />
+                                )}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ) : msg.type === "file" && msg.file ? (
+                        /* 2. File Transfer Bubble with WhatsApp-style In-App Preview */
+                        <div
+                          className={`relative p-3 rounded-2xl text-xs break-words shadow-2xs border transition-all ${
+                            msg.isMine
+                              ? "bg-indigo-600 text-white border-indigo-500 rounded-br-xs"
+                              : "bg-white dark:bg-slate-800 text-slate-900 dark:text-white border-slate-200 dark:border-slate-700/80 rounded-bl-xs"
+                          }`}
+                        >
+                          {/* Image preview */}
                           {isImageFile(msg.file) && msg.file.url && (
-                            <div className="mb-2.5 overflow-hidden rounded-xl bg-black/10">
+                            <div
+                              className="mb-2.5 overflow-hidden rounded-xl bg-black/10 cursor-pointer relative group/img"
+                              onClick={() => setPreviewFile(msg.file!)}
+                            >
                               <img
                                 src={msg.file.url}
                                 alt={msg.file.name}
-                                className="max-h-56 max-w-full rounded-xl object-contain cursor-pointer hover:opacity-95 transition-opacity"
-                                onClick={() =>
-                                  setPreviewImageModal({
-                                    url: msg.file!.url!,
-                                    name: msg.file!.name,
-                                  })
-                                }
+                                className="max-h-56 max-w-full rounded-xl object-contain hover:opacity-95 transition-opacity"
                               />
+                              <div className="absolute inset-0 bg-black/30 opacity-0 group-hover/img:opacity-100 flex items-center justify-center transition-opacity text-white gap-1 text-xs font-semibold">
+                                <Eye className="w-4 h-4" />
+                                <span>Preview</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Video player preview inline */}
+                          {isVideoFile(msg.file) && msg.file.url && msg.file.status === "completed" && (
+                            <div className="mb-2.5 overflow-hidden rounded-xl bg-black">
+                              <video src={msg.file.url} controls className="max-h-56 max-w-full rounded-xl" />
                             </div>
                           )}
 
                           {/* File info bar */}
                           <div className="flex items-center gap-2.5">
                             <div
-                              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 cursor-pointer ${
                                 msg.isMine
-                                  ? "bg-white/20 text-white"
-                                  : "bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border border-slate-200 dark:border-slate-700"
+                                  ? "bg-white/20 text-white hover:bg-white/30"
+                                  : "bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 border border-slate-200 dark:border-slate-700 hover:bg-indigo-100"
                               }`}
+                              onClick={() => msg.file?.status === "completed" && setPreviewFile(msg.file)}
+                              title="Click to preview file in-app without downloading"
                             >
                               {getFileTypeIcon(msg.file.mimeType, msg.file.name)}
                             </div>
 
-                            <div className="flex-1 min-w-0">
-                              <h4 className="font-semibold text-xs truncate max-w-[180px] sm:max-w-[240px]">
+                            <div
+                              className="flex-1 min-w-0 cursor-pointer"
+                              onClick={() => msg.file?.status === "completed" && setPreviewFile(msg.file)}
+                            >
+                              <h4 className="font-semibold text-xs truncate max-w-[170px] sm:max-w-[220px] hover:underline">
                                 {msg.file.name}
                               </h4>
                               <p
@@ -489,6 +624,21 @@ export function ChatScreen({
                                 {FileTransferService.formatFileSize(msg.file.size)}
                               </p>
                             </div>
+
+                            {/* In-App WhatsApp-style Preview Button */}
+                            {msg.file.status === "completed" && msg.file.url && (
+                              <button
+                                onClick={() => setPreviewFile(msg.file!)}
+                                className={`p-2 rounded-xl flex items-center justify-center shrink-0 transition-transform active:scale-95 cursor-pointer ${
+                                  msg.isMine
+                                    ? "bg-white/20 text-white hover:bg-white/30"
+                                    : "bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-600"
+                                }`}
+                                title="In-App Preview / প্রিভিউ দেখুন"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </button>
+                            )}
 
                             {/* Download Action */}
                             {msg.file.status === "completed" && msg.file.url && (
@@ -565,7 +715,7 @@ export function ChatScreen({
                           </div>
                         </div>
                       ) : (
-                        /* Standard Text Message */
+                        /* 3. Standard Text Message */
                         <div
                           className={`relative px-3.5 py-2 rounded-xl text-xs break-words shadow-2xs ${
                             msg.isMine
@@ -603,7 +753,7 @@ export function ChatScreen({
                       )}
 
                       {/* Copy message button (for text messages) */}
-                      {msg.type !== "file" && (
+                      {msg.type !== "file" && msg.type !== "voice" && (
                         <button
                           onClick={() => handleCopyMessage(msg.id, msg.text)}
                           className="opacity-0 group-hover:opacity-100 p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-opacity cursor-pointer"
@@ -632,45 +782,101 @@ export function ChatScreen({
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Input Bar */}
+            {/* Input Bar / Voice Recorder Bar */}
             <div className="p-2.5 sm:p-3 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
-              <div className="flex items-end gap-1.5">
-                <button
-                  id="attach-file-btn"
-                  onClick={handlePaperclipClick}
-                  className="p-2.5 rounded-xl text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-                  title="Share file (Images, Docs, Media, Archives)"
-                >
-                  <Paperclip className="w-4 h-4" />
-                </button>
+              {isRecording ? (
+                /* Live WhatsApp-style Voice Recording Bar */
+                <div className="flex items-center gap-2 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 rounded-2xl p-2 animate-in fade-in duration-150">
+                  {/* Blinking recording indicator & duration */}
+                  <div className="flex items-center gap-2 px-2">
+                    <span className="w-3 h-3 rounded-full bg-rose-500 animate-ping" />
+                    <span className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400">
+                      {formatTimer(recordDuration)}
+                    </span>
+                  </div>
 
-                <div className="flex-1 relative">
-                  <textarea
-                    id="chat-message-input"
-                    ref={textareaRef}
-                    value={inputText}
-                    onChange={handleInputChange}
-                    onKeyDown={handleKeyDown}
-                    placeholder={`Message ${activePeer.deviceName}... (Enter to send, Shift+Enter for newline)`}
-                    rows={1}
-                    className="w-full resize-none rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-slate-900 focus:outline-none max-h-28 transition-all"
-                  />
+                  {/* Dynamic audio level visualization wave bars */}
+                  <div className="flex-1 flex items-center justify-center gap-1 h-6 px-2">
+                    {[20, 45, 75, 30, 90, 60, 40, 80, 50, 35, 70, 45].map((h, i) => (
+                      <div
+                        key={i}
+                        className="w-1 bg-rose-500 rounded-full transition-all duration-100"
+                        style={{
+                          height: `${Math.max(4, (micVolume / 100) * h)}px`,
+                        }}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Cancel / Trash Recording */}
+                  <button
+                    onClick={handleCancelVoiceRecording}
+                    className="p-2 rounded-xl text-slate-500 hover:text-rose-600 hover:bg-rose-100 dark:hover:bg-rose-900/50 transition-colors cursor-pointer"
+                    title="Cancel recording"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+
+                  {/* Send Voice Note Button */}
+                  <button
+                    onClick={handleStopAndSendVoice}
+                    className="p-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs active:scale-95 transition-transform cursor-pointer"
+                    title="Send Voice Message"
+                  >
+                    <Send className="w-4 h-4" />
+                  </button>
                 </div>
+              ) : (
+                /* Standard Message Input Bar with Attach & Voice Record Buttons */
+                <div className="flex items-end gap-1.5">
+                  <button
+                    id="attach-file-btn"
+                    onClick={handlePaperclipClick}
+                    className="p-2.5 rounded-xl text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                    title="Share file (Images, Docs, PDF, Media, Code)"
+                  >
+                    <Paperclip className="w-4 h-4" />
+                  </button>
 
-                <button
-                  id="send-message-btn"
-                  onClick={handleSend}
-                  disabled={!inputText.trim()}
-                  className="p-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 disabled:opacity-40 text-white shadow-xs transition-all cursor-pointer"
-                  title="Send message"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
-              </div>
+                  <div className="flex-1 relative">
+                    <textarea
+                      id="chat-message-input"
+                      ref={textareaRef}
+                      value={inputText}
+                      onChange={handleInputChange}
+                      onKeyDown={handleKeyDown}
+                      placeholder={`Message ${activePeer.deviceName}... (Enter to send)`}
+                      rows={1}
+                      className="w-full resize-none rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-slate-900 focus:outline-none max-h-28 transition-all"
+                    />
+                  </div>
+
+                  {inputText.trim() ? (
+                    <button
+                      id="send-message-btn"
+                      onClick={handleSend}
+                      className="p-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white shadow-xs transition-all cursor-pointer"
+                      title="Send message"
+                    >
+                      <Send className="w-4 h-4" />
+                    </button>
+                  ) : (
+                    /* Microphone Voice Note Button (WhatsApp-style) */
+                    <button
+                      id="record-voice-btn"
+                      onClick={handleStartRecording}
+                      className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-600 hover:text-white dark:hover:bg-indigo-600 transition-all active:scale-95 shadow-2xs cursor-pointer"
+                      title="Record Voice Message / ভয়েস মেসেজ পাঠান"
+                    >
+                      <Mic className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              )}
 
               <div className="mt-1 flex items-center justify-between text-[10px] text-slate-400 dark:text-slate-500 px-0.5">
-                <span>Direct P2P File & Text Transfer</span>
-                <span>Drag & drop files or click 📎</span>
+                <span>Direct P2P File & Voice Sharing</span>
+                <span>Click 👁 to preview files without downloading</span>
               </div>
             </div>
           </>
@@ -682,7 +888,7 @@ export function ChatScreen({
             </div>
             <h3 className="text-base font-bold text-slate-900 dark:text-white">Select a Device</h3>
             <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400 max-w-xs">
-              Choose a connected device from the sidebar or connect a new device to start messaging and sharing files.
+              Choose a connected device from the sidebar or link a new device to start messaging, file sharing, voice notes, and voice calls.
             </p>
             <button
               onClick={onOpenConnectModal}
@@ -695,42 +901,12 @@ export function ChatScreen({
         )}
       </div>
 
-      {/* Lightbox Image Preview Modal */}
-      {previewImageModal && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
-          onClick={() => setPreviewImageModal(null)}
-        >
-          <div
-            className="relative max-w-3xl max-h-[90vh] flex flex-col items-center"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              onClick={() => setPreviewImageModal(null)}
-              className="absolute -top-10 right-0 p-1.5 text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded-full transition-colors cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            <img
-              src={previewImageModal.url}
-              alt={previewImageModal.name}
-              className="max-h-[80vh] max-w-full rounded-xl object-contain shadow-2xl"
-            />
-            <div className="mt-3 flex items-center gap-3">
-              <span className="text-xs text-white/80 font-medium truncate max-w-xs">
-                {previewImageModal.name}
-              </span>
-              <a
-                href={previewImageModal.url}
-                download={previewImageModal.name}
-                className="py-1 px-3 rounded-lg bg-indigo-600 text-white text-xs font-semibold flex items-center gap-1.5 hover:bg-indigo-700 transition-colors"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Save</span>
-              </a>
-            </div>
-          </div>
-        </div>
+      {/* In-App File Preview Modal (PDFs, Images, Videos, Code, Audio, etc.) */}
+      {previewFile && (
+        <FilePreviewModal
+          file={previewFile}
+          onClose={() => setPreviewFile(null)}
+        />
       )}
     </div>
   );
