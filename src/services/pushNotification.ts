@@ -4,6 +4,8 @@
 import { PushNotificationConfig } from "../types";
 
 const PUSH_PREF_KEY = "locallink_push_enabled";
+export const DEFAULT_VAPID_PUBLIC_KEY =
+  "BFm7fv04pawYpLg1YToXz99x2LG9YdKobqU6gWlTeKa1lvbgfC7MzUFCkomdZ1qyXsx0jx7DUf5XRjVEXO0zgVI";
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -38,15 +40,23 @@ export class PushNotificationService {
   public static async registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
     if (!this.isSupported()) return null;
 
-    if (this.swRegistration) return this.swRegistration;
-
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
-      this.swRegistration = reg;
-      return reg;
+      if (!this.swRegistration) {
+        this.swRegistration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      }
+      // Wait for service worker to be ready
+      await navigator.serviceWorker.ready;
+      return this.swRegistration;
     } catch (err) {
       console.warn("Service worker registration error:", err);
-      return null;
+      // Try ready promise as fallback
+      try {
+        const readyReg = await navigator.serviceWorker.ready;
+        this.swRegistration = readyReg;
+        return readyReg;
+      } catch {
+        return null;
+      }
     }
   }
 
@@ -76,16 +86,19 @@ export class PushNotificationService {
     };
   }
 
-  public static async fetchVapidPublicKey(): Promise<string | null> {
+  public static async fetchVapidPublicKey(): Promise<string> {
     try {
       const res = await fetch("/api/push/vapid-public-key");
-      if (!res.ok) return null;
-      const data = await res.json();
-      return data.publicKey || null;
+      if (res.ok) {
+        const data = await res.json();
+        if (data.publicKey && typeof data.publicKey === "string" && data.publicKey.length > 20) {
+          return data.publicKey;
+        }
+      }
     } catch (err) {
-      console.warn("Failed to fetch VAPID public key:", err);
-      return null;
+      console.warn("Could not fetch remote VAPID key, using default:", err);
     }
+    return DEFAULT_VAPID_PUBLIC_KEY;
   }
 
   public static async subscribe(
@@ -98,21 +111,25 @@ export class PushNotificationService {
 
     try {
       // 1. Request notification permission
-      const perm = await Notification.requestPermission();
+      let perm = Notification.permission;
+      if (perm !== "granted") {
+        perm = await Notification.requestPermission();
+      }
+
       if (perm !== "granted") {
         return {
           success: false,
-          error: "Notification permission was denied. Please allow notifications in browser settings.",
+          error: "Notification permission was denied. Please allow notifications in your browser settings (or open in a new tab if inside an iframe).",
         };
       }
 
-      // 2. Register Service Worker
+      // 2. Register Service Worker & Wait until ready
       const reg = await this.registerServiceWorker();
       if (!reg) {
         return { success: false, error: "Failed to initialize Service Worker." };
       }
 
-      // 3. Fetch server VAPID key
+      // 3. Fetch server or default VAPID key
       const vapidPublicKey = await this.fetchVapidPublicKey();
       if (!vapidPublicKey) {
         return { success: false, error: "Push notification server key unavailable." };

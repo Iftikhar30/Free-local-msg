@@ -8,20 +8,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Initialize VAPID Keys for Web Push Notifications
-let vapidKeys = {
-  publicKey: process.env.VAPID_PUBLIC_KEY || "",
-  privateKey: process.env.VAPID_PRIVATE_KEY || "",
-};
+const DEFAULT_VAPID_PUBLIC_KEY =
+  "BFm7fv04pawYpLg1YToXz99x2LG9YdKobqU6gWlTeKa1lvbgfC7MzUFCkomdZ1qyXsx0jx7DUf5XRjVEXO0zgVI";
+const DEFAULT_VAPID_PRIVATE_KEY = "WxKVsnG04R_D67zISTAkAj8A4RyIDQqSzwEjlhx0px4";
 
-if (!vapidKeys.publicKey || !vapidKeys.privateKey) {
-  // Generate a persistent in-process VAPID keypair if not configured in env
-  const generated = webpush.generateVAPIDKeys();
-  vapidKeys = {
-    publicKey: generated.publicKey,
-    privateKey: generated.privateKey,
-  };
-  console.log("[LocalLink] Generated VAPID Keys for Background Push Notifications");
-}
+const vapidKeys = {
+  publicKey: process.env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY,
+  privateKey: process.env.VAPID_PRIVATE_KEY || DEFAULT_VAPID_PRIVATE_KEY,
+};
 
 try {
   webpush.setVapidDetails(
