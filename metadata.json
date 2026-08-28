@@ -1,0 +1,6 @@
+{
+  "name": "LocalLink",
+  "description": "Peer-to-peer multi-device direct messaging and connection app powered by WebRTC and Vercel-compatible signaling.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
