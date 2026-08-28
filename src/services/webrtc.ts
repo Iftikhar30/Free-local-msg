@@ -86,15 +86,47 @@ export class WebRTCManager {
     };
   }
 
-  // Create or get existing RTCPeerConnection for a peer
-  private getOrCreatePeerConnection(peerId: string, isInitiator: boolean): RTCPeerConnection {
-    let pc = this.peerConnections.get(peerId);
-    if (pc && pc.connectionState !== "closed") {
-      return pc;
+  // Gracefully cleans up any existing stale connection objects for a peer
+  public cleanupPeerConnection(peerId: string) {
+    this.stopPingLoop(peerId);
+
+    const channel = this.dataChannels.get(peerId);
+    if (channel) {
+      try {
+        channel.onopen = null;
+        channel.onclose = null;
+        channel.onerror = null;
+        channel.onmessage = null;
+        if (channel.readyState !== "closed") {
+          channel.close();
+        }
+      } catch {}
+      this.dataChannels.delete(peerId);
     }
 
+    const pc = this.peerConnections.get(peerId);
+    if (pc) {
+      try {
+        pc.onicecandidate = null;
+        pc.onconnectionstatechange = null;
+        pc.oniceconnectionstatechange = null;
+        pc.ondatachannel = null;
+        if (pc.connectionState !== "closed") {
+          pc.close();
+        }
+      } catch {}
+      this.peerConnections.delete(peerId);
+    }
+
+    this.pendingCandidates.delete(peerId);
+  }
+
+  // Create a brand fresh RTCPeerConnection for a peer, cleaning up any previous stale objects
+  private createFreshPeerConnection(peerId: string, isInitiator: boolean): RTCPeerConnection {
+    this.cleanupPeerConnection(peerId);
+
     const config = this.getRtcConfiguration();
-    pc = new RTCPeerConnection(config);
+    const pc = new RTCPeerConnection(config);
     this.peerConnections.set(peerId, pc);
 
     // ICE Candidate handler
@@ -106,20 +138,30 @@ export class WebRTCManager {
 
     // Connection state changes
     pc.onconnectionstatechange = () => {
-      const state = pc!.connectionState as PeerConnectionStatus;
-      this.callbacks.onPeerStatusChange(peerId, state);
-
+      const state = pc.connectionState;
       if (state === "connected") {
+        this.callbacks.onPeerStatusChange(peerId, "connected");
         this.startPingLoop(peerId);
-      } else if (state === "disconnected" || state === "failed" || state === "closed") {
+      } else if (state === "connecting") {
+        this.callbacks.onPeerStatusChange(peerId, "connecting");
+      } else if (state === "disconnected") {
+        this.callbacks.onPeerStatusChange(peerId, "disconnected");
+        this.stopPingLoop(peerId);
+      } else if (state === "failed") {
+        this.callbacks.onPeerStatusChange(peerId, "failed");
+        this.stopPingLoop(peerId);
+      } else if (state === "closed") {
+        this.callbacks.onPeerStatusChange(peerId, "closed");
         this.stopPingLoop(peerId);
       }
     };
 
     pc.oniceconnectionstatechange = () => {
-      const iceState = pc!.iceConnectionState;
+      const iceState = pc.iceConnectionState;
       if (iceState === "failed" || iceState === "disconnected") {
         this.callbacks.onPeerStatusChange(peerId, iceState as PeerConnectionStatus);
+      } else if (iceState === "connected" || iceState === "completed") {
+        this.callbacks.onPeerStatusChange(peerId, "connected");
       }
     };
 
@@ -208,7 +250,7 @@ export class WebRTCManager {
   public async initiateConnection(peerId: string): Promise<void> {
     try {
       this.callbacks.onPeerStatusChange(peerId, "connecting");
-      const pc = this.getOrCreatePeerConnection(peerId, true);
+      const pc = this.createFreshPeerConnection(peerId, true);
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -227,7 +269,7 @@ export class WebRTCManager {
   public async handleRemoteOffer(peerId: string, offerSdp: RTCSessionDescriptionInit): Promise<void> {
     try {
       this.callbacks.onPeerStatusChange(peerId, "connecting");
-      const pc = this.getOrCreatePeerConnection(peerId, false);
+      const pc = this.createFreshPeerConnection(peerId, false);
 
       await pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
 
@@ -249,6 +291,12 @@ export class WebRTCManager {
       console.error("Error handling remote offer:", err);
       this.callbacks.onPeerStatusChange(peerId, "failed", err.message);
     }
+  }
+
+  // Reconnect a peer by cleaning up and initiating a fresh offer
+  public async reconnectPeer(peerId: string): Promise<void> {
+    this.callbacks.onPeerStatusChange(peerId, "reconnecting");
+    await this.initiateConnection(peerId);
   }
 
   // 3. Initiator handles incoming Answer

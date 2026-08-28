@@ -1,10 +1,13 @@
 export type PeerConnectionStatus =
   | "new"
   | "connecting"
+  | "reconnecting"
   | "connected"
   | "disconnected"
   | "failed"
   | "closed";
+
+export type AppTab = "home" | "devices" | "chat" | "settings" | "about";
 
 export type DeviceType = "phone" | "laptop" | "desktop" | "tablet" | "unknown";
 

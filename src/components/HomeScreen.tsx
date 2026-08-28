@@ -1,21 +1,18 @@
 import React, { useState } from "react";
 import {
   ArrowRight,
+  Camera,
   Check,
   Copy,
   Edit2,
-  Globe,
   Info,
   Laptop,
   MessageSquare,
   QrCode,
   Radio,
   RefreshCw,
-  Share2,
-  Shield,
   Smartphone,
   Wifi,
-  Zap,
 } from "lucide-react";
 import { ConnectedPeer, DeviceInfo, IncomingConnectionRequest } from "../types";
 
@@ -28,7 +25,7 @@ interface HomeScreenProps {
   incomingRequests: IncomingConnectionRequest[];
   onOpenConnectModal: () => void;
   onOpenQrModal: () => void;
-  onRegenerateCode: () => void;
+  onOpenRegenerateModal: () => void;
   onUpdateDeviceName: (name: string) => void;
   onQuickConnect: (code: string) => Promise<{ success: boolean; error?: string }>;
   onAcceptRequest: (requestId: string) => void;
@@ -46,7 +43,7 @@ export function HomeScreen({
   incomingRequests,
   onOpenConnectModal,
   onOpenQrModal,
-  onRegenerateCode,
+  onOpenRegenerateModal,
   onUpdateDeviceName,
   onQuickConnect,
   onAcceptRequest,
@@ -69,12 +66,13 @@ export function HomeScreen({
 
   const handleQuickConnect = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!quickCode.trim()) return;
+    const clean = quickCode.trim().toUpperCase();
+    if (!clean) return;
 
     setQuickLoading(true);
     setQuickError(null);
 
-    const res = await onQuickConnect(quickCode.trim());
+    const res = await onQuickConnect(clean);
     setQuickLoading(false);
 
     if (res.success) {
@@ -92,6 +90,8 @@ export function HomeScreen({
     setIsEditingName(false);
   };
 
+  const connectedPeers = peers.filter((p) => p.status === "connected");
+
   return (
     <div className="space-y-5 pb-8">
       {/* Hero Welcome Banner */}
@@ -103,7 +103,7 @@ export function HomeScreen({
           </span>
         </h1>
         <p className="mt-1 text-xs sm:text-sm text-slate-600 dark:text-slate-400 max-w-lg mx-auto">
-          Direct browser-to-browser WebRTC messaging across local Wi-Fi or Internet. No installations, no accounts, zero server message logs.
+          Direct browser-to-browser messaging across local Wi-Fi or Internet.
         </p>
       </div>
 
@@ -123,10 +123,10 @@ export function HomeScreen({
           {incomingRequests.map((req) => (
             <div
               key={req.id}
-              className="rounded-xl border border-indigo-500 bg-indigo-50/90 dark:bg-indigo-950/50 p-4 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3"
+              className="rounded-2xl border-2 border-indigo-500 bg-indigo-50/95 dark:bg-indigo-950/60 p-4 shadow-md flex flex-col sm:flex-row items-center justify-between gap-3"
             >
               <div className="flex items-center gap-3 text-center sm:text-left">
-                <div className="w-10 h-10 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
                   <Smartphone className="w-5 h-5 animate-pulse" />
                 </div>
                 <div>
@@ -137,20 +137,22 @@ export function HomeScreen({
                     {req.fromDeviceName} wants to connect
                   </h3>
                   <p className="text-[11px] text-slate-600 dark:text-slate-400">
-                    Accept to open direct peer-to-peer WebRTC messaging
+                    Accept to open direct peer-to-peer chat
                   </p>
                 </div>
               </div>
               <div className="flex items-center gap-2 w-full sm:w-auto">
                 <button
+                  id={`reject-home-req-${req.id}`}
                   onClick={() => onRejectRequest(req.id)}
-                  className="flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 transition-colors"
+                  className="flex-1 sm:flex-none px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 transition-colors"
                 >
                   Reject
                 </button>
                 <button
+                  id={`accept-home-req-${req.id}`}
                   onClick={() => onAcceptRequest(req.id)}
-                  className="flex-1 sm:flex-none px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-all active:scale-98"
+                  className="flex-1 sm:flex-none px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-all active:scale-98"
                 >
                   Accept & Connect
                 </button>
@@ -174,7 +176,7 @@ export function HomeScreen({
               </span>
               <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/60 dark:border-emerald-900/60 text-[10px] font-mono font-medium text-emerald-700 dark:text-emerald-300">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span>READY</span>
+                <span>{isSignalingReady ? "ONLINE" : "CONNECTING"}</span>
               </div>
             </div>
 
@@ -192,7 +194,7 @@ export function HomeScreen({
                   />
                   <button
                     type="submit"
-                    className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-xs font-semibold"
+                    className="px-3 py-1 rounded-lg bg-indigo-600 text-white text-xs font-semibold"
                   >
                     Save
                   </button>
@@ -242,7 +244,7 @@ export function HomeScreen({
               <button
                 id="copy-code-main-btn"
                 onClick={handleCopyCode}
-                className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white font-semibold text-xs transition-all shadow-xs"
+                className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white font-semibold text-xs transition-all shadow-xs"
               >
                 {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                 <span>{copied ? "Copied!" : "Copy Code"}</span>
@@ -251,7 +253,7 @@ export function HomeScreen({
               <button
                 id="show-qr-code-main-btn"
                 onClick={onOpenQrModal}
-                className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold text-xs transition-colors"
+                className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold text-xs transition-colors"
               >
                 <QrCode className="w-3.5 h-3.5" />
                 <span>Show QR Code</span>
@@ -260,11 +262,11 @@ export function HomeScreen({
 
             <button
               id="regenerate-code-btn"
-              onClick={onRegenerateCode}
-              className="w-full flex items-center justify-center gap-1 py-1 text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+              onClick={onOpenRegenerateModal}
+              className="w-full flex items-center justify-center gap-1 py-1.5 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors"
             >
               <RefreshCw className="w-3 h-3" />
-              <span>Regenerate temporary code</span>
+              <span>Generate New Code</span>
             </button>
           </div>
         </div>
@@ -279,10 +281,14 @@ export function HomeScreen({
               <span className="text-[11px] font-mono font-bold tracking-wider uppercase text-indigo-600 dark:text-indigo-400">
                 PAIR PEER
               </span>
-              <div className="flex items-center gap-1 text-[11px] text-slate-400">
-                <Wifi className="w-3 h-3 text-emerald-500" />
-                <span>LAN / Internet</span>
-              </div>
+              <button
+                type="button"
+                onClick={onOpenConnectModal}
+                className="flex items-center gap-1 text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold hover:underline"
+              >
+                <Camera className="w-3 h-3" />
+                <span>Scan QR</span>
+              </button>
             </div>
 
             <h2 className="mt-3 text-xl font-bold text-slate-900 dark:text-white">
@@ -300,7 +306,7 @@ export function HomeScreen({
                 <input
                   id="home-quick-connect-input"
                   type="text"
-                  maxLength={8}
+                  maxLength={6}
                   value={quickCode}
                   onChange={(e) => {
                     setQuickCode(e.target.value.toUpperCase());
@@ -320,8 +326,8 @@ export function HomeScreen({
               <button
                 type="submit"
                 id="home-quick-connect-btn"
-                disabled={quickLoading || !quickCode.trim()}
-                className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900 font-bold text-xs transition-all disabled:opacity-50 shadow-xs"
+                disabled={quickLoading || quickCode.trim().length !== 6}
+                className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900 font-bold text-xs transition-all disabled:opacity-50 shadow-xs"
               >
                 {quickLoading ? (
                   <>
@@ -342,14 +348,14 @@ export function HomeScreen({
           <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
             <div className="flex items-center justify-between text-xs mb-2">
               <span className="font-semibold text-slate-600 dark:text-slate-400 text-[11px]">
-                Connected Devices ({peers.length})
+                Connected Devices ({connectedPeers.length})
               </span>
               {peers.length > 0 && (
                 <button
                   onClick={onNavigateToDevices}
                   className="text-indigo-600 dark:text-indigo-400 hover:underline font-semibold text-[11px]"
                 >
-                  View All
+                  View All ({peers.length})
                 </button>
               )}
             </div>
@@ -368,7 +374,11 @@ export function HomeScreen({
                   >
                     <span
                       className={`w-1.5 h-1.5 rounded-full ${
-                        peer.status === "connected" ? "bg-emerald-500" : "bg-amber-500 animate-pulse"
+                        peer.status === "connected"
+                          ? "bg-emerald-500"
+                          : peer.status === "connecting" || peer.status === "reconnecting"
+                          ? "bg-amber-500 animate-pulse"
+                          : "bg-slate-400"
                       }`}
                     />
                     <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate max-w-[110px]">
@@ -380,39 +390,6 @@ export function HomeScreen({
               </div>
             )}
           </div>
-        </div>
-      </div>
-
-      {/* Feature / Architecture Dense Cards */}
-      <div className="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
-        <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3.5">
-          <div className="w-7 h-7 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-2">
-            <Zap className="w-4 h-4" />
-          </div>
-          <h3 className="text-xs font-bold text-slate-900 dark:text-white">Direct WebRTC P2P</h3>
-          <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 leading-normal">
-            Direct device-to-device transport through an encrypted WebRTC DataChannel without relay.
-          </p>
-        </div>
-
-        <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3.5">
-          <div className="w-7 h-7 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-2">
-            <Shield className="w-4 h-4" />
-          </div>
-          <h3 className="text-xs font-bold text-slate-900 dark:text-white">Private & Ephemeral</h3>
-          <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 leading-normal">
-            Zero server database storage of message contents. No accounts, passwords, or data tracking.
-          </p>
-        </div>
-
-        <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3.5">
-          <div className="w-7 h-7 rounded-lg bg-sky-50 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400 flex items-center justify-center mb-2">
-            <Globe className="w-4 h-4" />
-          </div>
-          <h3 className="text-xs font-bold text-slate-900 dark:text-white">Vercel Ready</h3>
-          <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 leading-normal">
-            Serverless signaling architecture with STUN/ICE traversal for multi-network routing.
-          </p>
         </div>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { AboutScreen } from "./components/AboutScreen";
 import { BottomNav } from "./components/BottomNav";
 import { ChatScreen } from "./components/ChatScreen";
 import { ConnectModal } from "./components/ConnectModal";
@@ -7,13 +8,16 @@ import { HomeScreen } from "./components/HomeScreen";
 import { IncomingRequestModal } from "./components/IncomingRequestModal";
 import { Navbar } from "./components/Navbar";
 import { QRCodeModal } from "./components/QRCodeModal";
+import { RegenerateCodeModal } from "./components/RegenerateCodeModal";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { useLocalLink } from "./hooks/useLocalLink";
+import { AppTab } from "./types";
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"home" | "devices" | "chat" | "settings">("home");
+  const [activeTab, setActiveTab] = useState<AppTab>("home");
   const [isConnectModalOpen, setIsConnectModalOpen] = useState(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
+  const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
 
   const {
     deviceInfo,
@@ -31,6 +35,8 @@ export default function App() {
     updateDeviceName,
     regenerateCode,
     connectByCode,
+    reconnectPeer,
+    removePeer,
     acceptConnectionRequest,
     rejectConnectionRequest,
     disconnectPeer,
@@ -87,7 +93,7 @@ export default function App() {
             incomingRequests={incomingRequests}
             onOpenConnectModal={() => setIsConnectModalOpen(true)}
             onOpenQrModal={() => setIsQrModalOpen(true)}
-            onRegenerateCode={regenerateCode}
+            onOpenRegenerateModal={() => setIsRegenerateModalOpen(true)}
             onUpdateDeviceName={updateDeviceName}
             onQuickConnect={connectByCode}
             onAcceptRequest={acceptConnectionRequest}
@@ -103,6 +109,8 @@ export default function App() {
             onOpenConnectModal={() => setIsConnectModalOpen(true)}
             onOpenChat={handleOpenChat}
             onDisconnectPeer={disconnectPeer}
+            onReconnectPeer={reconnectPeer}
+            onRemovePeer={removePeer}
           />
         )}
 
@@ -120,13 +128,24 @@ export default function App() {
           />
         )}
 
+        {activeTab === "about" && (
+          <AboutScreen
+            deviceInfo={deviceInfo}
+            isSignalingReady={isSignalingReady}
+            peers={peersList}
+          />
+        )}
+
         {activeTab === "settings" && (
           <SettingsScreen
             deviceInfo={deviceInfo}
             connectionCode={connectionCode}
             isSignalingReady={isSignalingReady}
+            soundEnabled={soundEnabled}
+            onSetSoundEnabled={setSoundEnabled}
             onUpdateDeviceName={updateDeviceName}
-            onRegenerateCode={regenerateCode}
+            onOpenRegenerateModal={() => setIsRegenerateModalOpen(true)}
+            onNavigateToAbout={() => setActiveTab("about")}
           />
         )}
       </main>
@@ -139,19 +158,27 @@ export default function App() {
         unreadTotal={totalUnread}
       />
 
-      {/* Connect Device Modal */}
+      {/* Connect Device Modal (with manual code + QR Camera scanner) */}
       <ConnectModal
         isOpen={isConnectModalOpen}
         onClose={() => setIsConnectModalOpen(false)}
         onConnect={connectByCode}
       />
 
-      {/* QR Code Modal */}
+      {/* QR Code Modal (generates high quality scannable SVG QR) */}
       <QRCodeModal
         isOpen={isQrModalOpen}
         onClose={() => setIsQrModalOpen(false)}
         connectionCode={connectionCode}
         deviceName={deviceInfo.deviceName}
+      />
+
+      {/* Regenerate Code Confirmation Modal */}
+      <RegenerateCodeModal
+        isOpen={isRegenerateModalOpen}
+        onClose={() => setIsRegenerateModalOpen(false)}
+        onConfirm={regenerateCode}
+        currentCode={connectionCode}
       />
 
       {/* Incoming Connection Request Prompts */}

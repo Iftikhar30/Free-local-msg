@@ -6,9 +6,11 @@ import {
   HardDrive,
   Info,
   Laptop,
+  Loader2,
   MessageSquare,
   Plus,
   Radio,
+  RefreshCw,
   Shield,
   Smartphone,
   Tablet,
@@ -23,6 +25,8 @@ interface DevicesScreenProps {
   onOpenConnectModal: () => void;
   onOpenChat: (peerId: string) => void;
   onDisconnectPeer: (peerId: string) => void;
+  onReconnectPeer: (peerId: string) => void;
+  onRemovePeer: (peerId: string) => void;
 }
 
 export function DevicesScreen({
@@ -30,6 +34,8 @@ export function DevicesScreen({
   onOpenConnectModal,
   onOpenChat,
   onDisconnectPeer,
+  onReconnectPeer,
+  onRemovePeer,
 }: DevicesScreenProps) {
   const [selectedDeviceInfo, setSelectedDeviceInfo] = useState<ConnectedPeer | null>(null);
 
@@ -51,10 +57,10 @@ export function DevicesScreen({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-3">
         <div>
           <h1 className="text-xl font-extrabold text-slate-900 dark:text-white">
-            Connected Devices
+            Connected & Known Devices
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Manage your active WebRTC peer connections ({peers.length} active)
+            Manage your active WebRTC peer connections and paired device history ({peers.length} saved)
           </p>
         </div>
         <button
@@ -90,6 +96,8 @@ export function DevicesScreen({
           {peers.map((peer) => {
             const isOnline = peer.status === "connected" && peer.dataChannelStatus === "open";
             const isConnecting = peer.status === "connecting";
+            const isReconnecting = peer.status === "reconnecting";
+            const isDisconnected = peer.status === "disconnected" || peer.status === "failed";
 
             return (
               <div
@@ -103,7 +111,7 @@ export function DevicesScreen({
                     className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
                       isOnline
                         ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60"
-                        : isConnecting
+                        : isConnecting || isReconnecting
                         ? "bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border border-amber-200/60 dark:border-amber-800/60"
                         : "bg-slate-100 dark:bg-slate-800 text-slate-400 border border-slate-200 dark:border-slate-700"
                     }`}
@@ -121,17 +129,25 @@ export function DevicesScreen({
                         className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[9px] font-mono font-semibold ${
                           isOnline
                             ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
-                            : isConnecting
+                            : isConnecting || isReconnecting
                             ? "bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 animate-pulse"
                             : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400"
                         }`}
                       >
                         <span
                           className={`w-1 h-1 rounded-full ${
-                            isOnline ? "bg-emerald-500" : isConnecting ? "bg-amber-500" : "bg-slate-400"
+                            isOnline ? "bg-emerald-500" : isConnecting || isReconnecting ? "bg-amber-500" : "bg-slate-400"
                           }`}
                         />
-                        <span>{isOnline ? "ONLINE" : isConnecting ? "CONNECTING" : "OFFLINE"}</span>
+                        <span>
+                          {isOnline
+                            ? "ONLINE"
+                            : isReconnecting
+                            ? "RECONNECTING"
+                            : isConnecting
+                            ? "CONNECTING"
+                            : "OFFLINE"}
+                        </span>
                       </span>
 
                       {/* Unread badge */}
@@ -145,6 +161,7 @@ export function DevicesScreen({
                     {/* Metadata line */}
                     <div className="mt-0.5 flex flex-wrap items-center gap-2.5 text-[11px] text-slate-500 dark:text-slate-400 font-mono">
                       {peer.os && <span>OS: {peer.os}</span>}
+                      {peer.connectionCode && <span>Code: {peer.connectionCode}</span>}
                       {peer.latencyMs !== undefined && isOnline && (
                         <span className="inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400">
                           <Activity className="w-2.5 h-2.5" />
@@ -179,13 +196,39 @@ export function DevicesScreen({
                     <Info className="w-3.5 h-3.5" />
                   </button>
 
-                  <button
-                    onClick={() => onDisconnectPeer(peer.deviceId)}
-                    className="p-2 rounded-lg border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/50 text-rose-600 dark:text-rose-400 transition-colors"
-                    title="Disconnect Device"
-                  >
-                    <Unplug className="w-3.5 h-3.5" />
-                  </button>
+                  {isOnline ? (
+                    <button
+                      onClick={() => onDisconnectPeer(peer.deviceId)}
+                      className="p-2 rounded-lg border border-rose-200 dark:border-rose-900/60 hover:bg-rose-50 dark:hover:bg-rose-950/50 text-rose-600 dark:text-rose-400 transition-colors"
+                      title="Disconnect Peer"
+                    >
+                      <Unplug className="w-3.5 h-3.5" />
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => onReconnectPeer(peer.deviceId)}
+                        disabled={isConnecting || isReconnecting}
+                        className="inline-flex items-center gap-1 py-1.5 px-2.5 rounded-lg border border-indigo-200 dark:border-indigo-800/80 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 text-xs font-semibold transition-colors disabled:opacity-50"
+                        title="Reconnect to device"
+                      >
+                        {isConnecting || isReconnecting ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        )}
+                        <span>Reconnect</span>
+                      </button>
+
+                      <button
+                        onClick={() => onRemovePeer(peer.deviceId)}
+                        className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/50 hover:text-rose-600 text-slate-400 transition-colors"
+                        title="Remove Device from List"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  )}
 
                   <button
                     onClick={() => onOpenChat(peer.deviceId)}

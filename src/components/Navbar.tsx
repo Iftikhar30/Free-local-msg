@@ -2,9 +2,8 @@ import React, { useState } from "react";
 import {
   Bell,
   BellOff,
-  ChevronRight,
   Edit2,
-  HardDrive,
+  Info,
   Laptop,
   Moon,
   Plus,
@@ -13,12 +12,12 @@ import {
   Smartphone,
   Sun,
 } from "lucide-react";
-import { DeviceInfo } from "../types";
+import { AppTab, DeviceInfo } from "../types";
 
 interface NavbarProps {
   deviceInfo: DeviceInfo;
-  activeTab: "home" | "devices" | "chat" | "settings";
-  setActiveTab: (tab: "home" | "devices" | "chat" | "settings") => void;
+  activeTab: AppTab;
+  setActiveTab: (tab: AppTab) => void;
   connectedCount: number;
   unreadTotal: number;
   isSignalingReady: boolean;
@@ -43,7 +42,10 @@ export function Navbar({
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(deviceInfo.deviceName);
   const [isDark, setIsDark] = useState(() => {
-    return document.documentElement.classList.contains("dark") || window.matchMedia("(prefers-color-scheme: dark)").matches;
+    return (
+      document.documentElement.classList.contains("dark") ||
+      window.matchMedia("(prefers-color-scheme: dark)").matches
+    );
   });
 
   const toggleDarkMode = () => {
@@ -139,6 +141,17 @@ export function Navbar({
                   {unreadTotal}
                 </span>
               )}
+            </button>
+            <button
+              id="nav-tab-about"
+              onClick={() => setActiveTab("about")}
+              className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${
+                activeTab === "about"
+                  ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs border border-slate-200/50 dark:border-slate-700/50"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200"
+              }`}
+            >
+              About
             </button>
             <button
               id="nav-tab-settings"

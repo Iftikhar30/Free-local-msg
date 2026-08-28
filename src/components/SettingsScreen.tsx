@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from "react";
 import {
+  Bell,
+  BellOff,
   Check,
   CheckCircle2,
+  ExternalLink,
   HardDrive,
   Info,
   Key,
@@ -9,26 +12,36 @@ import {
   Server,
   ShieldCheck,
   Smartphone,
-  Terminal,
+  Sparkles,
+  Trash2,
+  Volume2,
+  VolumeX,
   Zap,
 } from "lucide-react";
 import { DeviceInfo } from "../types";
-import { getCustomIceServers, setCustomIceServers } from "../services/device";
+import { clearAllStorage, getCustomIceServers, setCustomIceServers } from "../services/device";
+import { playMessageSound } from "../services/sound";
 
 interface SettingsScreenProps {
   deviceInfo: DeviceInfo;
   connectionCode: string;
   isSignalingReady: boolean;
+  soundEnabled: boolean;
+  onSetSoundEnabled: (enabled: boolean) => void;
   onUpdateDeviceName: (name: string) => void;
-  onRegenerateCode: () => void;
+  onOpenRegenerateModal: () => void;
+  onNavigateToAbout: () => void;
 }
 
 export function SettingsScreen({
   deviceInfo,
   connectionCode,
   isSignalingReady,
+  soundEnabled,
+  onSetSoundEnabled,
   onUpdateDeviceName,
-  onRegenerateCode,
+  onOpenRegenerateModal,
+  onNavigateToAbout,
 }: SettingsScreenProps) {
   const [nameInput, setNameInput] = useState(deviceInfo.deviceName);
   const [nameSaved, setNameSaved] = useState(false);
@@ -37,33 +50,7 @@ export function SettingsScreen({
   const [iceServerInput, setIceServerInput] = useState("");
   const [iceSaved, setIceSaved] = useState(false);
 
-  // Browser diagnostics
-  const [diagnostics, setDiagnostics] = useState<{
-    webrtc: boolean;
-    dataChannel: boolean;
-    crypto: boolean;
-    storage: boolean;
-  }>({
-    webrtc: false,
-    dataChannel: false,
-    crypto: false,
-    storage: false,
-  });
-
   useEffect(() => {
-    // Run diagnostics
-    const hasWebRTC = typeof window !== "undefined" && "RTCPeerConnection" in window;
-    const hasDataChannel = hasWebRTC && "RTCDataChannel" in window;
-    const hasCrypto = typeof window !== "undefined" && "crypto" in window && "getRandomValues" in window.crypto;
-    const hasStorage = typeof window !== "undefined" && "localStorage" in window;
-
-    setDiagnostics({
-      webrtc: hasWebRTC,
-      dataChannel: hasDataChannel,
-      crypto: hasCrypto,
-      storage: hasStorage,
-    });
-
     const savedIce = getCustomIceServers();
     if (savedIce.length > 0) {
       setIceServerInput(JSON.stringify(savedIce, null, 2));
@@ -76,6 +63,14 @@ export function SettingsScreen({
       onUpdateDeviceName(nameInput.trim());
       setNameSaved(true);
       setTimeout(() => setNameSaved(false), 2000);
+    }
+  };
+
+  const handleToggleSound = () => {
+    const next = !soundEnabled;
+    onSetSoundEnabled(next);
+    if (next) {
+      playMessageSound();
     }
   };
 
@@ -101,13 +96,24 @@ export function SettingsScreen({
     }
   };
 
+  const handleResetData = () => {
+    if (
+      confirm(
+        "Are you sure you want to clear all paired devices and chat history? Your current device identity will reset on next load."
+      )
+    ) {
+      clearAllStorage();
+      window.location.reload();
+    }
+  };
+
   return (
     <div className="max-w-3xl mx-auto space-y-4 pb-8">
       {/* Title */}
       <div className="border-b border-slate-200 dark:border-slate-800 pb-3">
         <h1 className="text-xl font-extrabold text-slate-900 dark:text-white">Settings</h1>
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-          Configure device identity, WebRTC traversal, and security parameters.
+          Configure device identity, notifications, and WebRTC parameters.
         </p>
       </div>
 
@@ -118,7 +124,9 @@ export function SettingsScreen({
             <Smartphone className="w-4 h-4" />
           </div>
           <div>
-            <h3 className="font-bold text-slate-900 dark:text-white text-xs uppercase tracking-wider">Device Profile</h3>
+            <h3 className="font-bold text-slate-900 dark:text-white text-xs uppercase tracking-wider">
+              Device Profile
+            </h3>
           </div>
         </div>
 
@@ -146,36 +154,65 @@ export function SettingsScreen({
               </button>
             </div>
             <p className="mt-1 text-[11px] text-slate-400 font-mono">
-              Auto-detected environment: {deviceInfo.os} • {deviceInfo.browser}
+              Environment: {deviceInfo.os} • {deviceInfo.browser}
             </p>
           </div>
 
           <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs border-t border-slate-100 dark:border-slate-800/60">
             <div>
-              <span className="text-slate-400">Device ID: </span>
-              <span className="font-mono text-slate-600 dark:text-slate-300 text-[10px]">
-                {deviceInfo.deviceId}
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-400">Current Code: </span>
+              <span className="text-slate-400">Connection Code: </span>
               <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 text-xs">
                 {connectionCode}
               </span>
-              <button
-                type="button"
-                onClick={onRegenerateCode}
-                className="ml-1 flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-[10px] text-slate-700 dark:text-slate-300 font-medium transition-colors"
-              >
-                <RefreshCw className="w-2.5 h-2.5" />
-                <span>Rotate</span>
-              </button>
             </div>
+            <button
+              type="button"
+              id="settings-rotate-code-btn"
+              onClick={onOpenRegenerateModal}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs text-slate-700 dark:text-slate-300 font-medium transition-colors"
+            >
+              <RefreshCw className="w-3 h-3" />
+              <span>Generate New Code</span>
+            </button>
           </div>
         </form>
       </div>
 
-      {/* 2. WebRTC & STUN / TURN Server Configuration */}
+      {/* 2. Notification & Sound Settings */}
+      <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-2xs">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="p-1 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400">
+              {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-900 dark:text-white text-xs uppercase tracking-wider">
+                Sound Effects & Chimes
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Play subtle audio tones for incoming connection requests and new messages
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            id="toggle-sound-btn"
+            onClick={handleToggleSound}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+              soundEnabled ? "bg-indigo-600" : "bg-slate-300 dark:bg-slate-700"
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                soundEnabled ? "translate-x-5" : "translate-x-0"
+              }`}
+            />
+          </button>
+        </div>
+      </div>
+
+      {/* 3. WebRTC & STUN / TURN Traversal */}
       <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-2xs">
         <div className="flex items-center gap-2 pb-2.5 border-b border-slate-100 dark:border-slate-800">
           <div className="p-1 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
@@ -190,14 +227,16 @@ export function SettingsScreen({
 
         <div className="mt-3 space-y-3">
           <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60 text-xs text-slate-600 dark:text-slate-300 space-y-0.5">
-            <div className="font-semibold text-slate-800 dark:text-slate-200 text-[11px]">Default STUN Pool:</div>
+            <div className="font-semibold text-slate-800 dark:text-slate-200 text-[11px]">
+              Default STUN Pool:
+            </div>
             <div className="font-mono text-[10px] text-indigo-600 dark:text-indigo-400">
               • stun:stun.l.google.com:19302<br />
               • stun:stun1.l.google.com:19302<br />
               • stun:stun2.l.google.com:19302
             </div>
             <p className="pt-0.5 text-[10px] text-slate-500 dark:text-slate-400">
-              Google STUN servers enable peer connections across standard routers, Wi-Fi networks, and mobile data without relaying.
+              No TURN server is required for initial direct local network and standard Internet testing.
             </p>
           </div>
 
@@ -210,8 +249,8 @@ export function SettingsScreen({
                 value={iceServerInput}
                 onChange={(e) => setIceServerInput(e.target.value)}
                 placeholder={`[\n  {\n    "urls": "turn:turn.example.com:3478",\n    "username": "user",\n    "credential": "password"\n  }\n]`}
-                rows={3}
-                className="w-full font-mono text-[11px] rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-2.5 text-slate-900 dark:text-white focus:border-indigo-500 focus:outline-none"
+                rows={2}
+                className="w-full font-mono text-[11px] rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-2 text-slate-900 dark:text-white focus:border-indigo-500 focus:outline-none"
               />
             </div>
             <button
@@ -219,81 +258,53 @@ export function SettingsScreen({
               className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-semibold text-xs transition-colors"
             >
               {iceSaved ? <Check className="w-3 h-3" /> : null}
-              <span>{iceSaved ? "Saved Custom ICE" : "Save ICE Servers"}</span>
+              <span>{iceSaved ? "Saved Custom ICE" : "Save ICE Configuration"}</span>
             </button>
           </form>
         </div>
       </div>
 
-      {/* 3. Browser & API Diagnostics */}
-      <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-2xs">
-        <div className="flex items-center gap-2 pb-2.5 border-b border-slate-100 dark:border-slate-800">
-          <div className="p-1 rounded-md bg-sky-50 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400">
-            <Zap className="w-4 h-4" />
+      {/* 4. About LocalLink & Architecture Link */}
+      <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-2xs flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400">
+            <Sparkles className="w-4 h-4" />
           </div>
           <div>
-            <h3 className="font-bold text-slate-900 dark:text-white text-xs uppercase tracking-wider">Browser Diagnostics</h3>
+            <h3 className="font-bold text-slate-900 dark:text-white text-xs">About LocalLink</h3>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Built with Google AI Studio • Privacy statement, diagnostics, and WebRTC lifecycle
+            </p>
           </div>
         </div>
 
-        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-          <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60">
-            <span className="font-medium text-slate-700 dark:text-slate-300 text-[11px]">RTCPeerConnection</span>
-            <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold text-[11px]">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Supported
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60">
-            <span className="font-medium text-slate-700 dark:text-slate-300 text-[11px]">RTCDataChannel</span>
-            <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold text-[11px]">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Supported
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60">
-            <span className="font-medium text-slate-700 dark:text-slate-300 text-[11px]">Web Cryptography</span>
-            <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold text-[11px]">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Supported
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60">
-            <span className="font-medium text-slate-700 dark:text-slate-300 text-[11px]">Signaling API</span>
-            <span
-              className={`flex items-center gap-1 font-semibold text-[11px] ${
-                isSignalingReady ? "text-emerald-600 dark:text-emerald-400" : "text-amber-500 animate-pulse"
-              }`}
-            >
-              <CheckCircle2 className="w-3.5 h-3.5" /> {isSignalingReady ? "Online" : "Connecting..."}
-            </span>
-          </div>
-        </div>
+        <button
+          type="button"
+          onClick={onNavigateToAbout}
+          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/80 text-indigo-700 dark:text-indigo-300 font-semibold text-xs transition-colors"
+        >
+          <span>View About</span>
+          <ExternalLink className="w-3 h-3" />
+        </button>
       </div>
 
-      {/* 4. Privacy & Security Statement */}
-      <div className="rounded-xl bg-slate-900 text-white p-4 shadow-sm border border-slate-800">
-        <div className="flex items-center gap-2 mb-2">
-          <ShieldCheck className="w-4 h-4 text-emerald-400" />
-          <h3 className="text-xs font-bold uppercase tracking-wider">Privacy & Architecture Guarantee</h3>
+      {/* 5. Storage & Reset */}
+      <div className="rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50/40 dark:bg-rose-950/20 p-4 flex items-center justify-between">
+        <div>
+          <h3 className="font-bold text-rose-800 dark:text-rose-300 text-xs">Reset Local Storage</h3>
+          <p className="text-[11px] text-rose-700/80 dark:text-rose-400/80">
+            Clear all cached paired peers and local message history
+          </p>
         </div>
-        <p className="text-[11px] text-slate-300 leading-normal">
-          Messages travel directly between devices using peer-to-peer WebRTC DataChannels with DTLS and SCTP protocol.
-        </p>
-        <div className="mt-2.5 grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px] text-slate-300">
-          <div className="p-2 rounded-lg bg-white/5 border border-white/10">
-            <div className="font-semibold text-white">Zero Server Storage</div>
-            <div className="text-[10px] text-slate-400 mt-0.5">Payloads never touch disk.</div>
-          </div>
-          <div className="p-2 rounded-lg bg-white/5 border border-white/10">
-            <div className="font-semibold text-white">E2E WebRTC</div>
-            <div className="text-[10px] text-slate-400 mt-0.5">DTLS encrypted data channel.</div>
-          </div>
-          <div className="p-2 rounded-lg bg-white/5 border border-white/10">
-            <div className="font-semibold text-white">No Accounts Required</div>
-            <div className="text-[10px] text-slate-400 mt-0.5">No logins or tracking.</div>
-          </div>
-        </div>
+
+        <button
+          type="button"
+          onClick={handleResetData}
+          className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 text-rose-600 dark:text-rose-400 font-semibold text-xs hover:bg-rose-50 dark:hover:bg-rose-950 transition-colors"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          <span>Reset All</span>
+        </button>
       </div>
     </div>
   );

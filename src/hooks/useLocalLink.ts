@@ -9,46 +9,37 @@ import {
 } from "../types";
 import {
   detectDeviceEnvironment,
-  generateConnectionCode,
   getDeviceInfo,
+  getOrCreateConnectionCode,
+  getStoredKnownPeers,
+  rotateConnectionCode,
+  saveStoredKnownPeers,
   setStoredDeviceName,
 } from "../services/device";
 import { MessagingService } from "../services/messaging";
 import { SignalingClient } from "../services/signaling";
 import { WebRTCManager } from "../services/webrtc";
-
-// Subtle Web Audio tone generator for incoming messages / requests
-function playBeep(frequency = 600, duration = 0.15) {
-  try {
-    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioContextClass) return;
-    const ctx = new AudioContextClass();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(frequency, ctx.currentTime);
-    gain.gain.setValueAtTime(0.08, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
-
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-
-    osc.start();
-    osc.stop(ctx.currentTime + duration);
-  } catch (e) {
-    // Ignore audio permission restrictions
-  }
-}
+import {
+  getStoredSoundPreference,
+  playConnectionRequestSound,
+  playMessageSound,
+  setStoredSoundPreference,
+} from "../services/sound";
 
 export function useLocalLink() {
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo>(() => getDeviceInfo());
-  const [connectionCode, setConnectionCode] = useState<string>(() => generateConnectionCode());
+  // Persistent 6-character code (survives page reloads)
+  const [connectionCode, setConnectionCode] = useState<string>(() => getOrCreateConnectionCode());
   const [isSignalingReady, setIsSignalingReady] = useState(false);
   const [signalingError, setSignalingError] = useState<string | null>(null);
 
-  // Connected peers list
-  const [peers, setPeers] = useState<Map<string, ConnectedPeer>>(new Map<string, ConnectedPeer>());
+  // Connected & known peers list loaded from persistent storage
+  const [peers, setPeers] = useState<Map<string, ConnectedPeer>>(() => {
+    const initialMap = new Map<string, ConnectedPeer>();
+    const stored = getStoredKnownPeers();
+    stored.forEach((p) => initialMap.set(p.deviceId, p));
+    return initialMap;
+  });
   const [activePeerId, setActivePeerId] = useState<string | null>(null);
 
   // Messages map: peerId -> ChatMessage[]
@@ -60,13 +51,23 @@ export function useLocalLink() {
   // Incoming connection requests
   const [incomingRequests, setIncomingRequests] = useState<IncomingConnectionRequest[]>([]);
 
-  // Sound enabled
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  // Sound preference
+  const [soundEnabled, setSoundEnabledState] = useState<boolean>(() => getStoredSoundPreference());
+
+  const setSoundEnabled = (enabled: boolean) => {
+    setStoredSoundPreference(enabled);
+    setSoundEnabledState(enabled);
+  };
 
   // References to keep callbacks current without re-instantiating services
   const signalingClientRef = useRef<SignalingClient | null>(null);
   const webrtcManagerRef = useRef<WebRTCManager | null>(null);
   const messagingServiceRef = useRef<MessagingService | null>(null);
+
+  // Save peers whenever the map changes
+  useEffect(() => {
+    saveStoredKnownPeers(Array.from(peers.values()));
+  }, [peers]);
 
   // 1. Initialize Signaling, WebRTC, and Messaging services
   useEffect(() => {
@@ -97,7 +98,7 @@ export function useLocalLink() {
             next.set(peerId, {
               ...peer,
               dataChannelStatus: state,
-              status: state === "open" ? "connected" : peer.status,
+              status: state === "open" ? "connected" : state === "closed" ? "disconnected" : peer.status,
             });
           }
           return next;
@@ -124,7 +125,7 @@ export function useLocalLink() {
 
     const messaging = new MessagingService(webrtc, deviceInfo.deviceId, deviceInfo.deviceName, {
       onMessageReceived: (msg: ChatMessage) => {
-        if (soundEnabled) playBeep(750, 0.18);
+        playMessageSound();
 
         setChatHistories((prev) => {
           const next = new Map<string, ChatMessage[]>(prev);
@@ -172,7 +173,7 @@ export function useLocalLink() {
     });
     messagingServiceRef.current = messaging;
 
-    // Register our code on signaling server
+    // Register our persistent code on signaling server
     const registerDevice = async () => {
       const res = await signaling.register(connectionCode);
       if (res.success) {
@@ -180,8 +181,8 @@ export function useLocalLink() {
         setSignalingError(null);
       } else {
         if (res.codeTaken) {
-          const newCode = generateConnectionCode();
-          setConnectionCode(newCode);
+          const fresh = rotateConnectionCode();
+          setConnectionCode(fresh);
         } else {
           setSignalingError(res.error || "Failed to connect to signaling server");
         }
@@ -202,7 +203,14 @@ export function useLocalLink() {
       handleIncomingSignal(signal);
     });
 
+    // Handle online/offline network reconnection
+    const handleOnline = () => {
+      signaling.register(connectionCode);
+    };
+    window.addEventListener("online", handleOnline);
+
     return () => {
+      window.removeEventListener("online", handleOnline);
       signaling.stop();
       webrtc.disconnectAll();
     };
@@ -212,9 +220,8 @@ export function useLocalLink() {
   const handleIncomingSignal = async (signal: SignalMessage) => {
     switch (signal.type) {
       case "connect_request": {
-        if (soundEnabled) playBeep(520, 0.25);
+        playConnectionRequestSound();
         setIncomingRequests((prev) => {
-          // Avoid duplicate requests from same peer
           if (prev.some((r) => r.fromDeviceId === signal.fromDeviceId)) {
             return prev;
           }
@@ -266,7 +273,10 @@ export function useLocalLink() {
           // Connection rejected
           setPeers((prev) => {
             const next = new Map<string, ConnectedPeer>(prev);
-            next.delete(signal.fromDeviceId);
+            const p = next.get(signal.fromDeviceId);
+            if (p) {
+              next.set(signal.fromDeviceId, { ...p, status: "failed" });
+            }
             return next;
           });
         }
@@ -321,9 +331,9 @@ export function useLocalLink() {
     signalingClientRef.current?.register(connectionCode);
   };
 
-  // Regenerate Connection Code
+  // Explicitly generate and rotate to a new Connection Code
   const regenerateCode = async () => {
-    const newCode = generateConnectionCode();
+    const newCode = rotateConnectionCode();
     setConnectionCode(newCode);
     if (signalingClientRef.current) {
       await signalingClientRef.current.register(newCode);
@@ -374,6 +384,34 @@ export function useLocalLink() {
     });
 
     return { success: true };
+  };
+
+  // Reconnect an existing known peer
+  const reconnectPeer = async (peerId: string): Promise<void> => {
+    const peer = peers.get(peerId);
+    if (!peer) return;
+
+    setPeers((prev) => {
+      const next = new Map<string, ConnectedPeer>(prev);
+      const p = next.get(peerId);
+      if (p) {
+        next.set(peerId, { ...p, status: "reconnecting", dataChannelStatus: "connecting" });
+      }
+      return next;
+    });
+
+    if (peer.connectionCode) {
+      // If we know their code, request connection again
+      await connectByCode(peer.connectionCode);
+    } else {
+      // Try direct WebRTC re-initiation via signaling
+      const env = detectDeviceEnvironment();
+      await signalingClientRef.current?.sendSignal(peerId, "connect_request", {
+        deviceType: env.deviceType,
+        os: env.os,
+      });
+      await webrtcManagerRef.current?.reconnectPeer(peerId);
+    }
   };
 
   // Accept incoming connection request
@@ -437,13 +475,26 @@ export function useLocalLink() {
 
     setPeers((prev) => {
       const next = new Map<string, ConnectedPeer>(prev);
-      next.delete(peerId);
+      const p = next.get(peerId);
+      if (p) {
+        next.set(peerId, { ...p, status: "disconnected", dataChannelStatus: "closed" });
+      }
       return next;
     });
 
     if (activePeerId === peerId) {
       setActivePeerId(null);
     }
+  };
+
+  // Remove known peer from saved list
+  const removePeer = (peerId: string) => {
+    disconnectPeer(peerId);
+    setPeers((prev) => {
+      const next = new Map<string, ConnectedPeer>(prev);
+      next.delete(peerId);
+      return next;
+    });
   };
 
   // Send a private text message to active peer
@@ -527,6 +578,8 @@ export function useLocalLink() {
     updateDeviceName,
     regenerateCode,
     connectByCode,
+    reconnectPeer,
+    removePeer,
     acceptConnectionRequest,
     rejectConnectionRequest,
     disconnectPeer,
