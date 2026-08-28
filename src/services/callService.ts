@@ -1,4 +1,5 @@
 import { ActiveCallState, CallStatus, DataPacket, DeviceType } from "../types";
+import { detectDeviceEnvironment, getCustomIceServers } from "./device";
 import {
   playCallConnectedSound,
   playCallEndedSound,
@@ -25,6 +26,9 @@ export class VoiceCallService {
   private durationInterval: any = null;
   private audioElement: HTMLAudioElement | null = null;
 
+  private pendingRemoteOffer: RTCSessionDescriptionInit | null = null;
+  private pendingRemoteIceCandidates: RTCIceCandidateInit[] = [];
+
   constructor(myDeviceId: string, myDeviceName: string, callbacks: CallServiceCallbacks) {
     this.myDeviceId = myDeviceId;
     this.myDeviceName = myDeviceName;
@@ -34,10 +38,49 @@ export class VoiceCallService {
 
   private initAudioElement() {
     if (typeof window !== "undefined") {
-      this.audioElement = new Audio();
-      this.audioElement.autoplay = true;
-      (this.audioElement as any).playsInline = true;
+      let el = document.getElementById("locallink-call-audio-stream") as HTMLAudioElement;
+      if (!el) {
+        el = document.createElement("audio");
+        el.id = "locallink-call-audio-stream";
+        el.autoplay = true;
+        (el as any).playsInline = true;
+        el.style.display = "none";
+        document.body.appendChild(el);
+      }
+      this.audioElement = el;
     }
+  }
+
+  private getRtcConfiguration(): RTCConfiguration {
+    const defaultStunPool = [
+      "stun:stun.l.google.com:19302",
+      "stun:stun1.l.google.com:19302",
+      "stun:stun2.l.google.com:19302",
+      "stun:stun3.l.google.com:19302",
+      "stun:stun4.l.google.com:19302",
+      "stun:stun.cloudflare.com:3478",
+      "stun:stun.services.mozilla.com",
+    ];
+
+    const envStun = (import.meta as any).env?.VITE_STUN_SERVERS;
+    const stunUrls =
+      envStun && typeof envStun === "string" && envStun.trim()
+        ? envStun.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : defaultStunPool;
+
+    const iceServers: RTCIceServer[] = stunUrls.map((url: string) => ({ urls: url }));
+
+    const custom = getCustomIceServers();
+    if (Array.isArray(custom) && custom.length > 0) {
+      custom.forEach((c) => {
+        if (c.urls) iceServers.push(c);
+      });
+    }
+
+    return {
+      iceServers,
+      iceCandidatePoolSize: 10,
+    };
   }
 
   public getActiveCall(): ActiveCallState | null {
@@ -55,8 +98,10 @@ export class VoiceCallService {
   // 1. Start an outgoing call
   public async startCall(peerId: string, peerName: string, peerDeviceType?: DeviceType): Promise<boolean> {
     if (this.activeCall && this.activeCall.status !== "idle" && this.activeCall.status !== "ended") {
-      return false; // Already in a call
+      return false;
     }
+
+    this.cleanupCall();
 
     try {
       // 1. Get microphone access
@@ -86,11 +131,48 @@ export class VoiceCallService {
       // Play outgoing ringback tone
       startOutgoingRingback();
 
-      // Create Call RTCPeerConnection
-      await this.setupCallPeerConnection(peerId, true);
+      // Create WebRTC PeerConnection for Voice Call
+      const pc = new RTCPeerConnection(this.getRtcConfiguration());
+      this.callPeerConnection = pc;
 
-      // Send call request packet to peer
-      this.callbacks.sendPacket(peerId, {
+      // Add local audio tracks to peer connection
+      stream.getAudioTracks().forEach((track) => {
+        pc.addTrack(track, stream);
+      });
+
+      // Handle remote incoming audio stream
+      pc.ontrack = (event) => {
+        if (event.streams && event.streams[0]) {
+          this.remoteStream = event.streams[0];
+          this.attachRemoteAudio(event.streams[0]);
+        }
+      };
+
+      // Handle ICE Candidates
+      pc.onicecandidate = (event) => {
+        if (event.candidate && this.activeCall) {
+          this.callbacks.sendPacket(peerId, {
+            id: `call_ice_${Date.now()}`,
+            type: "call_ice_candidate",
+            timestamp: Date.now(),
+            senderId: this.myDeviceId,
+            senderName: this.myDeviceName,
+            payload: {
+              callId,
+              candidate: event.candidate.toJSON(),
+            },
+          });
+        }
+      };
+
+      // Create and set local SDP Offer
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+      });
+      await pc.setLocalDescription(offer);
+
+      // Send call request packet to peer with SDP Offer
+      const sent = this.callbacks.sendPacket(peerId, {
         id: `call_req_${Date.now()}`,
         type: "call_request",
         timestamp: Date.now(),
@@ -99,8 +181,19 @@ export class VoiceCallService {
         payload: {
           callId,
           callerName: this.myDeviceName,
+          peerDeviceType: detectDeviceEnvironment().deviceType,
+          offer: pc.localDescription?.toJSON() || offer,
         },
       });
+
+      if (!sent) {
+        console.warn("Failed to send call_request packet over DataChannel, falling back to signaling");
+        this.callbacks.sendSignal?.(peerId, "offer", {
+          callId,
+          callerName: this.myDeviceName,
+          offer: pc.localDescription?.toJSON() || offer,
+        });
+      }
 
       return true;
     } catch (err) {
@@ -113,9 +206,15 @@ export class VoiceCallService {
   }
 
   // 2. Incoming call received
-  public handleIncomingCallRequest(peerId: string, callerName: string, callId: string, peerDeviceType?: DeviceType) {
+  public handleIncomingCallRequest(
+    peerId: string,
+    callerName: string,
+    callId: string,
+    offer?: RTCSessionDescriptionInit,
+    peerDeviceType?: DeviceType
+  ) {
     if (this.activeCall && this.activeCall.status !== "idle" && this.activeCall.status !== "ended") {
-      // Busy: Auto-reject with busy message
+      // Busy: Auto-reject with busy reason
       this.callbacks.sendPacket(peerId, {
         id: `call_rej_${Date.now()}`,
         type: "call_reject",
@@ -126,6 +225,9 @@ export class VoiceCallService {
       });
       return;
     }
+
+    this.pendingRemoteOffer = offer || null;
+    this.pendingRemoteIceCandidates = [];
 
     this.activeCall = {
       callId,
@@ -164,16 +266,73 @@ export class VoiceCallService {
       const peerId = this.activeCall.peerId;
       const callId = this.activeCall.callId;
 
-      await this.setupCallPeerConnection(peerId, false);
+      // Create WebRTC PeerConnection for Voice Call
+      const pc = new RTCPeerConnection(this.getRtcConfiguration());
+      this.callPeerConnection = pc;
 
-      // Notify caller that we accepted
+      // Add local audio track
+      stream.getAudioTracks().forEach((track) => {
+        pc.addTrack(track, stream);
+      });
+
+      // Handle remote incoming audio stream
+      pc.ontrack = (event) => {
+        if (event.streams && event.streams[0]) {
+          this.remoteStream = event.streams[0];
+          this.attachRemoteAudio(event.streams[0]);
+        }
+      };
+
+      // Handle ICE Candidates
+      pc.onicecandidate = (event) => {
+        if (event.candidate && this.activeCall) {
+          this.callbacks.sendPacket(peerId, {
+            id: `call_ice_${Date.now()}`,
+            type: "call_ice_candidate",
+            timestamp: Date.now(),
+            senderId: this.myDeviceId,
+            senderName: this.myDeviceName,
+            payload: {
+              callId,
+              candidate: event.candidate.toJSON(),
+            },
+          });
+        }
+      };
+
+      // Set Remote Description (Caller's SDP Offer)
+      if (this.pendingRemoteOffer) {
+        await pc.setRemoteDescription(new RTCSessionDescription(this.pendingRemoteOffer));
+        this.pendingRemoteOffer = null;
+      }
+
+      // Flush any queued ICE candidates received prior to answering
+      while (this.pendingRemoteIceCandidates.length > 0) {
+        const cand = this.pendingRemoteIceCandidates.shift();
+        if (cand) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(cand));
+          } catch (e) {
+            console.warn("Failed to add buffered candidate:", e);
+          }
+        }
+      }
+
+      // Create and set local SDP Answer
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      // Notify caller with SDP Answer
       this.callbacks.sendPacket(peerId, {
         id: `call_acc_${Date.now()}`,
         type: "call_accept",
         timestamp: Date.now(),
         senderId: this.myDeviceId,
         senderName: this.myDeviceName,
-        payload: { callId },
+        payload: {
+          callId,
+          answer: pc.localDescription?.toJSON() || answer,
+        },
       });
 
       this.setCallConnected();
@@ -229,20 +388,59 @@ export class VoiceCallService {
   }
 
   // 6. Handle remote response packets
-  public handleCallPacket(packet: DataPacket) {
+  public async handleCallPacket(packet: DataPacket) {
     switch (packet.type) {
       case "call_request":
         this.handleIncomingCallRequest(
           packet.senderId,
-          packet.senderName,
+          packet.payload.callerName || packet.senderName,
           packet.payload.callId,
+          packet.payload.offer,
           packet.payload.peerDeviceType
         );
         break;
 
       case "call_accept":
         if (this.activeCall && this.activeCall.status === "outgoing_calling") {
+          const answer = packet.payload.answer;
+          if (this.callPeerConnection && answer) {
+            try {
+              await this.callPeerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+
+              // Flush buffered candidates
+              while (this.pendingRemoteIceCandidates.length > 0) {
+                const cand = this.pendingRemoteIceCandidates.shift();
+                if (cand) {
+                  try {
+                    await this.callPeerConnection.addIceCandidate(new RTCIceCandidate(cand));
+                  } catch (e) {
+                    console.warn("Failed to add buffered candidate on answer:", e);
+                  }
+                }
+              }
+            } catch (err) {
+              console.error("Failed to set remote description on call_accept:", err);
+            }
+          }
           this.setCallConnected();
+        }
+        break;
+
+      case "call_ice_candidate":
+        if (packet.payload?.candidate) {
+          if (
+            this.callPeerConnection &&
+            this.callPeerConnection.remoteDescription &&
+            this.callPeerConnection.remoteDescription.type
+          ) {
+            try {
+              await this.callPeerConnection.addIceCandidate(new RTCIceCandidate(packet.payload.candidate));
+            } catch (err) {
+              console.warn("Failed to add received ICE candidate:", err);
+            }
+          } else {
+            this.pendingRemoteIceCandidates.push(packet.payload.candidate);
+          }
         }
         break;
 
@@ -303,19 +501,46 @@ export class VoiceCallService {
     return false;
   }
 
+  private attachRemoteAudio(stream: MediaStream) {
+    if (typeof window === "undefined") return;
+
+    if (!this.audioElement) {
+      this.initAudioElement();
+    }
+
+    if (this.audioElement) {
+      this.audioElement.srcObject = stream;
+      const playPromise = this.audioElement.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          console.warn("Auto-play was prevented by browser policy, unlocking on next touch:", err);
+          const unlock = () => {
+            this.audioElement?.play().catch(console.warn);
+            window.removeEventListener("click", unlock);
+            window.removeEventListener("touchstart", unlock);
+          };
+          window.addEventListener("click", unlock, { once: true });
+          window.addEventListener("touchstart", unlock, { once: true });
+        });
+      }
+    }
+  }
+
   private setCallConnected() {
     stopCallAudio();
     playCallConnectedSound();
 
+    if (!this.activeCall) return;
+
     this.activeCall = {
-      ...this.activeCall!,
+      ...this.activeCall,
       status: "connected",
       startTime: Date.now(),
       duration: 0,
     };
     this.callbacks.onCallStateChange(this.activeCall);
 
-    // Start timer counter
+    // Start duration timer counter
     if (this.durationInterval) clearInterval(this.durationInterval);
     this.durationInterval = setInterval(() => {
       if (this.activeCall && this.activeCall.status === "connected") {
@@ -326,50 +551,6 @@ export class VoiceCallService {
         this.callbacks.onCallStateChange(this.activeCall);
       }
     }, 1000);
-  }
-
-  private async setupCallPeerConnection(peerId: string, isInitiator: boolean) {
-    if (this.callPeerConnection) {
-      this.callPeerConnection.close();
-      this.callPeerConnection = null;
-    }
-
-    const stunPool = [
-      { urls: "stun:stun.l.google.com:19302" },
-      { urls: "stun:stun1.l.google.com:19302" },
-      { urls: "stun:stun.cloudflare.com:3478" },
-    ];
-
-    const pc = new RTCPeerConnection({ iceServers: stunPool });
-    this.callPeerConnection = pc;
-
-    // Attach local audio track
-    if (this.localStream) {
-      this.localStream.getAudioTracks().forEach((track) => {
-        pc.addTrack(track, this.localStream!);
-      });
-    }
-
-    // Remote audio track handler
-    pc.ontrack = (event) => {
-      if (event.streams && event.streams[0]) {
-        this.remoteStream = event.streams[0];
-        if (this.audioElement) {
-          this.audioElement.srcObject = event.streams[0];
-          this.audioElement.play().catch(console.warn);
-        }
-      }
-    };
-
-    // Forward call ICE candidates
-    pc.onicecandidate = (event) => {
-      if (event.candidate && this.activeCall) {
-        // Send candidate via dataChannel or signal
-        if (this.callbacks.sendSignal) {
-          this.callbacks.sendSignal(peerId, "ice-candidate", event.candidate.toJSON());
-        }
-      }
-    };
   }
 
   public cleanupCall() {
@@ -386,13 +567,20 @@ export class VoiceCallService {
     }
 
     if (this.audioElement) {
-      this.audioElement.srcObject = null;
+      try {
+        this.audioElement.pause();
+        this.audioElement.srcObject = null;
+      } catch {}
     }
 
     this.remoteStream = null;
+    this.pendingRemoteOffer = null;
+    this.pendingRemoteIceCandidates = [];
 
     if (this.callPeerConnection) {
       try {
+        this.callPeerConnection.ontrack = null;
+        this.callPeerConnection.onicecandidate = null;
         this.callPeerConnection.close();
       } catch {}
       this.callPeerConnection = null;

@@ -116,7 +116,8 @@ export function useLocalLink() {
           packet.type === "call_accept" ||
           packet.type === "call_reject" ||
           packet.type === "call_end" ||
-          packet.type === "call_mute_toggle"
+          packet.type === "call_mute_toggle" ||
+          packet.type === "call_ice_candidate"
         ) {
           voiceCallServiceRef.current?.handleCallPacket(packet);
         } else {
@@ -146,7 +147,14 @@ export function useLocalLink() {
         setChatHistories((prev) => {
           const next = new Map<string, ChatMessage[]>(prev);
           const list = next.get(msg.fromDeviceId) || [];
-          next.set(msg.fromDeviceId, [...list, msg]);
+          const existingIndex = list.findIndex((m) => m.id === msg.id);
+          if (existingIndex >= 0) {
+            const updated = [...list];
+            updated[existingIndex] = msg;
+            next.set(msg.fromDeviceId, updated);
+          } else {
+            next.set(msg.fromDeviceId, [...list, msg]);
+          }
           return next;
         });
 
@@ -192,7 +200,16 @@ export function useLocalLink() {
           const list = next.get(peerId);
           if (list) {
             const updated = list.map((msg) => {
-              if (msg.id === fileId || (msg.file && msg.file.id === fileId)) {
+              if (msg.id === fileId || (msg.file && msg.file.id === fileId) || (msg.voice && msg.voice.id === fileId)) {
+                if (msg.type === "voice" && msg.voice) {
+                  return {
+                    ...msg,
+                    voice: {
+                      ...msg.voice,
+                      ...(url ? { url } : {}),
+                    },
+                  };
+                }
                 const existingFile = msg.file || {
                   id: fileId,
                   name: "File",

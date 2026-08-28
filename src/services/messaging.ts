@@ -326,12 +326,17 @@ export class MessagingService {
   ) {
     try {
       const history = this.getChatHistory(peerId);
-      const msg = history.find((m) => m.id === fileId || (m.file && m.file.id === fileId));
-      if (msg && msg.file) {
-        msg.file.progress = progress;
-        msg.file.status = status;
-        if (url) {
-          msg.file.url = url;
+      const msg = history.find((m) => m.id === fileId || (m.file && m.file.id === fileId) || (m.voice && m.voice.id === fileId));
+      if (msg) {
+        if (msg.file) {
+          msg.file.progress = progress;
+          msg.file.status = status;
+          if (url) {
+            msg.file.url = url;
+          }
+        }
+        if (msg.voice && url) {
+          msg.voice.url = url;
         }
         localStorage.setItem(`${CHAT_STORAGE_PREFIX}${peerId}`, JSON.stringify(history));
       }

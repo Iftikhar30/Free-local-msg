@@ -357,29 +357,6 @@ export class FileTransferService {
         const blobUrl = URL.createObjectURL(blob);
         this.objectUrls.set(fileId, blobUrl);
 
-        // If voice note, update voice message
-        if (transfer.isVoice) {
-          const voiceMsg: ChatMessage = {
-            id: fileId,
-            fromDeviceId: packet.senderId,
-            toDeviceId: this.myDeviceId,
-            text: "Voice message",
-            timestamp: packet.timestamp,
-            status: "delivered",
-            isMine: false,
-            type: "voice",
-            voice: {
-              id: fileId,
-              url: blobUrl,
-              duration: transfer.duration || 1,
-              mimeType: transfer.mimeType,
-              size: transfer.size,
-              waveformData: transfer.waveformData,
-            },
-          };
-          this.onFileReceivedCallback?.(peerId, voiceMsg);
-        }
-
         this.incomingTransfers.delete(fileId);
         this.onFileProgressCallback?.(peerId, fileId, 100, "completed", blobUrl);
         playFileTransferCompleteSound();

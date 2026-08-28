@@ -120,6 +120,7 @@ export type DataPacketType =
   | "call_reject"
   | "call_end"
   | "call_mute_toggle"
+  | "call_ice_candidate"
   | "disconnect_notify";
 
 export interface DataPacket {
