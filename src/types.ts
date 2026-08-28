@@ -45,6 +45,20 @@ export interface IncomingConnectionRequest {
   data?: any;
 }
 
+export interface FileTransferItem {
+  id: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  totalChunks: number;
+  progress: number; // 0 - 100
+  status: "transferring" | "completed" | "error" | "cancelled";
+  url?: string;
+  speed?: string;
+  error?: string;
+  isMine?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   fromDeviceId: string;
@@ -53,12 +67,8 @@ export interface ChatMessage {
   timestamp: number;
   status: "sending" | "sent" | "delivered" | "read" | "failed";
   isMine: boolean;
-  type?: "text" | "file_info";
-  fileMetadata?: {
-    name: string;
-    size: number;
-    mimeType: string;
-  };
+  type?: "text" | "file";
+  file?: FileTransferItem;
 }
 
 export type DataPacketType =
@@ -68,9 +78,11 @@ export type DataPacketType =
   | "typing"
   | "ping"
   | "pong"
-  | "file_offer"
+  | "file_start"
   | "file_chunk"
+  | "file_complete"
   | "file_ack"
+  | "file_cancel"
   | "disconnect_notify";
 
 export interface DataPacket {
@@ -103,3 +115,4 @@ export interface SignalMessage {
   data: any;
   timestamp: number;
 }
+

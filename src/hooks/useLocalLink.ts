@@ -170,8 +170,42 @@ export function useLocalLink() {
           return next;
         });
       },
+      onFileProgressUpdated: (peerId, fileId, progress, status, url) => {
+        setChatHistories((prev) => {
+          const next = new Map<string, ChatMessage[]>(prev);
+          const list = next.get(peerId);
+          if (list) {
+            const updated = list.map((msg) => {
+              if (msg.id === fileId || (msg.file && msg.file.id === fileId)) {
+                const existingFile = msg.file || {
+                  id: fileId,
+                  name: "File",
+                  size: 0,
+                  mimeType: "application/octet-stream",
+                  totalChunks: 1,
+                  progress: 0,
+                  status: "transferring" as const,
+                };
+                return {
+                  ...msg,
+                  file: {
+                    ...existingFile,
+                    progress,
+                    status,
+                    ...(url ? { url } : {}),
+                  },
+                };
+              }
+              return msg;
+            });
+            next.set(peerId, updated);
+          }
+          return next;
+        });
+      },
     });
     messagingServiceRef.current = messaging;
+
 
     // Register our persistent code on signaling server
     const registerDevice = async () => {
@@ -526,6 +560,57 @@ export function useLocalLink() {
     }
   };
 
+  // Send a file to active peer
+  const sendFile = async (peerId: string, file: File): Promise<ChatMessage | null> => {
+    if (!messagingServiceRef.current) return null;
+
+    try {
+      const msg = await messagingServiceRef.current.sendFile(peerId, file);
+      setChatHistories((prev) => {
+        const next = new Map<string, ChatMessage[]>(prev);
+        const list = next.get(peerId) || [];
+        next.set(peerId, [...list, msg]);
+        return next;
+      });
+
+      setPeers((prev) => {
+        const next = new Map<string, ConnectedPeer>(prev);
+        const peer = next.get(peerId);
+        if (peer) {
+          next.set(peerId, { ...peer, lastMessage: msg, lastSeen: Date.now() });
+        }
+        return next;
+      });
+
+      return msg;
+    } catch (err) {
+      console.error("Failed to send file:", err);
+      return null;
+    }
+  };
+
+  // Cancel ongoing file transfer
+  const cancelFileTransfer = (peerId: string, fileId: string) => {
+    messagingServiceRef.current?.cancelFileTransfer(peerId, fileId);
+    setChatHistories((prev) => {
+      const next = new Map<string, ChatMessage[]>(prev);
+      const list = next.get(peerId);
+      if (list) {
+        const updated = list.map((msg) => {
+          if (msg.id === fileId || (msg.file && msg.file.id === fileId)) {
+            return {
+              ...msg,
+              file: msg.file ? { ...msg.file, status: "cancelled" as const } : undefined,
+            };
+          }
+          return msg;
+        });
+        next.set(peerId, updated);
+      }
+      return next;
+    });
+  };
+
   // Set typing indicator
   const sendTypingIndicator = (peerId: string, isTyping: boolean) => {
     messagingServiceRef.current?.sendTyping(peerId, isTyping);
@@ -584,8 +669,11 @@ export function useLocalLink() {
     rejectConnectionRequest,
     disconnectPeer,
     sendMessage,
+    sendFile,
+    cancelFileTransfer,
     sendTypingIndicator,
     openChatWithPeer,
     setActivePeerId,
   };
+
 }

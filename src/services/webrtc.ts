@@ -38,15 +38,21 @@ export class WebRTCManager {
   }
 
   private getRtcConfiguration(): RTCConfiguration {
-    // Standard STUN servers (Default: Google public STUN pool)
+    // High availability STUN server pool (Default: Multi-region Google + Cloudflare + Mozilla STUN pool)
+    const defaultStunPool = [
+      "stun:stun.l.google.com:19302",
+      "stun:stun1.l.google.com:19302",
+      "stun:stun2.l.google.com:19302",
+      "stun:stun3.l.google.com:19302",
+      "stun:stun4.l.google.com:19302",
+      "stun:stun.cloudflare.com:3478",
+      "stun:stun.services.mozilla.com",
+    ];
+
     const envStun = (import.meta as any).env?.VITE_STUN_SERVERS;
     const stunUrls = (envStun && typeof envStun === "string" && envStun.trim())
       ? envStun.split(",").map((s: string) => s.trim()).filter(Boolean)
-      : [
-          "stun:stun.l.google.com:19302",
-          "stun:stun1.l.google.com:19302",
-          "stun:stun2.l.google.com:19302",
-        ];
+      : defaultStunPool;
 
     const iceServers: RTCIceServer[] = stunUrls.map((url: string) => ({ urls: url }));
 
@@ -185,6 +191,11 @@ export class WebRTCManager {
   private setupDataChannel(peerId: string, channel: RTCDataChannel) {
     this.dataChannels.set(peerId, channel);
 
+    try {
+      channel.binaryType = "arraybuffer";
+      channel.bufferedAmountLowThreshold = 64 * 1024; // 64KB threshold
+    } catch {}
+
     channel.onopen = () => {
       this.callbacks.onDataChannelStateChange(peerId, "open");
       this.callbacks.onPeerStatusChange(peerId, "connected");
@@ -203,12 +214,38 @@ export class WebRTCManager {
 
     channel.onmessage = (event) => {
       try {
-        const packet: DataPacket = JSON.parse(event.data);
-        this.handleIncomingDataPacket(peerId, packet);
+        if (typeof event.data === "string") {
+          const packet: DataPacket = JSON.parse(event.data);
+          this.handleIncomingDataPacket(peerId, packet);
+        }
       } catch (err) {
         console.error("Failed to parse DataPacket JSON:", err);
       }
     };
+  }
+
+  // Wait for data channel buffer to drain before sending more chunks
+  public async waitForBufferDrain(peerId: string, maxBuffered = 64 * 1024): Promise<void> {
+    const channel = this.dataChannels.get(peerId);
+    if (!channel || channel.readyState !== "open") return;
+
+    if (channel.bufferedAmount <= maxBuffered) return;
+
+    return new Promise<void>((resolve) => {
+      const checkOrWait = () => {
+        if (!channel || channel.readyState !== "open" || channel.bufferedAmount <= maxBuffered) {
+          resolve();
+        } else {
+          channel.onbufferedamountlow = () => {
+            channel.onbufferedamountlow = null;
+            resolve();
+          };
+          // Fallback timeout in case onbufferedamountlow doesn't fire
+          setTimeout(resolve, 50);
+        }
+      };
+      checkOrWait();
+    });
   }
 
   private handleIncomingDataPacket(peerId: string, packet: DataPacket) {

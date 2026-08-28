@@ -41,6 +41,8 @@ export default function App() {
     rejectConnectionRequest,
     disconnectPeer,
     sendMessage,
+    sendFile,
+    cancelFileTransfer,
     sendTypingIndicator,
     openChatWithPeer,
     setActivePeerId,
@@ -122,6 +124,8 @@ export default function App() {
             isTargetTyping={isTargetTyping}
             onSelectPeer={openChatWithPeer}
             onSendMessage={sendMessage}
+            onSendFile={sendFile}
+            onCancelFileTransfer={cancelFileTransfer}
             onSendTypingIndicator={sendTypingIndicator}
             onDisconnectPeer={disconnectPeer}
             onOpenConnectModal={() => setIsConnectModalOpen(true)}

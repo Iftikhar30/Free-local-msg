@@ -1,4 +1,5 @@
-import { ChatMessage, DataPacket } from "../types";
+import { ChatMessage, DataPacket, FileTransferItem } from "../types";
+import { FileTransferService } from "./fileTransfer";
 import { WebRTCManager } from "./webrtc";
 
 const CHAT_STORAGE_PREFIX = "locallink_chat_";
@@ -7,9 +8,17 @@ export class MessagingService {
   private webrtc: WebRTCManager;
   private myDeviceId: string;
   private myDeviceName: string;
+  private fileTransfer: FileTransferService;
   private onMessageReceivedCallback?: (msg: ChatMessage) => void;
   private onMessageStatusUpdatedCallback?: (msgId: string, status: ChatMessage["status"]) => void;
   private onTypingStateCallback?: (peerId: string, isTyping: boolean) => void;
+  private onFileProgressUpdatedCallback?: (
+    peerId: string,
+    fileId: string,
+    progress: number,
+    status: FileTransferItem["status"],
+    url?: string
+  ) => void;
 
   constructor(
     webrtc: WebRTCManager,
@@ -19,6 +28,13 @@ export class MessagingService {
       onMessageReceived?: (msg: ChatMessage) => void;
       onMessageStatusUpdated?: (msgId: string, status: ChatMessage["status"]) => void;
       onTypingState?: (peerId: string, isTyping: boolean) => void;
+      onFileProgressUpdated?: (
+        peerId: string,
+        fileId: string,
+        progress: number,
+        status: FileTransferItem["status"],
+        url?: string
+      ) => void;
     }
   ) {
     this.webrtc = webrtc;
@@ -27,10 +43,27 @@ export class MessagingService {
     this.onMessageReceivedCallback = callbacks.onMessageReceived;
     this.onMessageStatusUpdatedCallback = callbacks.onMessageStatusUpdated;
     this.onTypingStateCallback = callbacks.onTypingState;
+    this.onFileProgressUpdatedCallback = callbacks.onFileProgressUpdated;
+
+    this.fileTransfer = new FileTransferService(webrtc, myDeviceId, myDeviceName, {
+      onFileProgress: (peerId, fileId, progress, status, url) => {
+        this.updateFileProgressInHistory(peerId, fileId, progress, status, url);
+        if (this.onFileProgressUpdatedCallback) {
+          this.onFileProgressUpdatedCallback(peerId, fileId, progress, status, url);
+        }
+      },
+      onFileReceived: (peerId, msg) => {
+        this.saveMessageToHistory(peerId, msg);
+        if (this.onMessageReceivedCallback) {
+          this.onMessageReceivedCallback(msg);
+        }
+      },
+    });
   }
 
   public updateMyDeviceName(name: string) {
     this.myDeviceName = name;
+    this.fileTransfer.updateMyDeviceName(name);
   }
 
   /**
@@ -78,6 +111,41 @@ export class MessagingService {
     }
 
     return chatMsg;
+  }
+
+  /**
+   * Send a file to peer over direct WebRTC DataChannel with chunking
+   */
+  public async sendFile(
+    toPeerId: string,
+    file: File,
+    onProgress?: (progress: number, speed: string) => void
+  ): Promise<ChatMessage> {
+    const { fileItem, messageId } = await this.fileTransfer.sendFile(toPeerId, file, onProgress);
+
+    const chatMsg: ChatMessage = {
+      id: messageId,
+      fromDeviceId: this.myDeviceId,
+      toDeviceId: toPeerId,
+      text: `Sent a file: ${file.name}`,
+      timestamp: Date.now(),
+      status: "sent",
+      isMine: true,
+      type: "file",
+      file: fileItem,
+    };
+
+    this.saveMessageToHistory(toPeerId, chatMsg);
+    return chatMsg;
+  }
+
+  public cancelFileTransfer(peerId: string, fileId: string) {
+    this.fileTransfer.cancelTransfer(peerId, fileId);
+    this.updateFileProgressInHistory(peerId, fileId, 0, "cancelled");
+  }
+
+  public getFileObjectUrl(fileId: string): string | undefined {
+    return this.fileTransfer.getObjectUrl(fileId);
   }
 
   /**
@@ -133,11 +201,11 @@ export class MessagingService {
         break;
       }
 
-      case "file_offer":
+      case "file_start":
       case "file_chunk":
-      case "file_ack": {
-        // Forwarded to file transfer handler (future ready)
-        this.handleFileTransferPacket(peerId, packet);
+      case "file_complete":
+      case "file_cancel": {
+        this.fileTransfer.handleFilePacket(peerId, packet);
         break;
       }
     }
@@ -177,25 +245,6 @@ export class MessagingService {
   }
 
   /**
-   * Future file transfer abstractions
-   */
-  public async sendFile(toPeerId: string, file: File, onProgress?: (percent: number) => void): Promise<string> {
-    const fileId = `file_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    // Placeholder abstraction structure for future file transfer expansion
-    console.log(`[LocalLink Future File Architecture] Prepared sendFile for ${file.name} (${file.size} bytes) to ${toPeerId}`);
-    return fileId;
-  }
-
-  public receiveFile(peerId: string, fileId: string, chunk: ArrayBuffer) {
-    // Placeholder abstraction structure for receiving chunk
-    console.log(`[LocalLink Future File Architecture] Received chunk for file ${fileId} from ${peerId}`);
-  }
-
-  private handleFileTransferPacket(peerId: string, packet: DataPacket) {
-    console.log(`[LocalLink File Protocol] Handled packet ${packet.type} from ${peerId}`);
-  }
-
-  /**
    * Local private history persistence (Indexed/Local device only)
    */
   public getChatHistory(peerId: string): ChatMessage[] {
@@ -228,6 +277,29 @@ export class MessagingService {
     }
   }
 
+  public updateFileProgressInHistory(
+    peerId: string,
+    fileId: string,
+    progress: number,
+    status: FileTransferItem["status"],
+    url?: string
+  ) {
+    try {
+      const history = this.getChatHistory(peerId);
+      const msg = history.find((m) => m.id === fileId || (m.file && m.file.id === fileId));
+      if (msg && msg.file) {
+        msg.file.progress = progress;
+        msg.file.status = status;
+        if (url) {
+          msg.file.url = url;
+        }
+        localStorage.setItem(`${CHAT_STORAGE_PREFIX}${peerId}`, JSON.stringify(history));
+      }
+    } catch (e) {
+      console.warn("Failed to update file progress in history:", e);
+    }
+  }
+
   public updateMessageStatusInHistory(peerId: string, msgId: string, status: ChatMessage["status"]) {
     try {
       const history = this.getChatHistory(peerId);
@@ -245,3 +317,4 @@ export class MessagingService {
     localStorage.removeItem(`${CHAT_STORAGE_PREFIX}${peerId}`);
   }
 }
+

@@ -9,6 +9,8 @@ export class SignalingClient {
   private onSignalReceivedCallback?: (signal: SignalMessage) => void;
   private onErrorCallback?: (err: Error) => void;
   private isPolling = false;
+  private eventSource: EventSource | null = null;
+  private fastPollCount = 0;
 
   constructor(deviceId: string, deviceName: string) {
     this.deviceId = deviceId;
@@ -25,6 +27,10 @@ export class SignalingClient {
       // Default to current origin / deployment
       this.baseUrl = "";
     }
+  }
+
+  public triggerFastPolling(durationMs = 6000) {
+    this.fastPollCount = Math.ceil(durationMs / 400);
   }
 
   public getBaseUrl(): string {
@@ -118,6 +124,7 @@ export class SignalingClient {
     data: any
   ): Promise<{ success: boolean; error?: string }> {
     try {
+      this.triggerFastPolling();
       const res = await fetch(`${this.baseUrl}/api/signal/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -148,10 +155,13 @@ export class SignalingClient {
     this.onSignalReceivedCallback = onSignal;
     this.onErrorCallback = onError;
 
+    // Start Server-Sent Events for zero-latency signal reception
+    this.startSSE();
+
     if (this.isPolling) return;
     this.isPolling = true;
 
-    // Start poll loop (every 1.5 seconds for responsive signaling)
+    // Adaptive polling loop (350ms during active handshake, 1200ms when idle)
     const poll = async () => {
       if (!this.isPolling) return;
       try {
@@ -176,7 +186,9 @@ export class SignalingClient {
         }
       } finally {
         if (this.isPolling) {
-          this.pollIntervalId = setTimeout(poll, 1500);
+          const nextInterval = this.fastPollCount > 0 ? 350 : 1200;
+          if (this.fastPollCount > 0) this.fastPollCount--;
+          this.pollIntervalId = setTimeout(poll, nextInterval);
         }
       }
     };
@@ -189,8 +201,44 @@ export class SignalingClient {
     }, 20000);
   }
 
+  private startSSE() {
+    if (typeof window === "undefined" || !("EventSource" in window)) return;
+
+    try {
+      if (this.eventSource) {
+        this.eventSource.close();
+      }
+
+      const sseUrl = `${this.baseUrl}/api/signal/events?deviceId=${encodeURIComponent(this.deviceId)}`;
+      const es = new EventSource(sseUrl);
+      this.eventSource = es;
+
+      es.onmessage = (event) => {
+        try {
+          if (!event.data || event.data.trim() === "") return;
+          const signal: SignalMessage = JSON.parse(event.data);
+          if (signal && signal.type && this.onSignalReceivedCallback) {
+            this.onSignalReceivedCallback(signal);
+          }
+        } catch (e) {
+          console.warn("SSE parse signal error:", e);
+        }
+      };
+
+      es.onerror = () => {
+        // SSE connection dropped; polling loop continues seamlessly
+      };
+    } catch (e) {
+      console.warn("SSE initialization error:", e);
+    }
+  }
+
   public stop() {
     this.isPolling = false;
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
     if (this.pollIntervalId) {
       clearTimeout(this.pollIntervalId);
       this.pollIntervalId = null;
@@ -201,3 +249,4 @@ export class SignalingClient {
     }
   }
 }
+

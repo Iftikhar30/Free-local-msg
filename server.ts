@@ -29,6 +29,7 @@ interface SignalEnvelope {
 const devicesByCode = new Map<string, DeviceRegistration>();
 const devicesById = new Map<string, DeviceRegistration>();
 const signalMailbox = new Map<string, SignalEnvelope[]>(); // toDeviceId -> signals[]
+const sseClients = new Map<string, Set<express.Response>>(); // deviceId -> Set of open SSE responses
 
 const CODE_TTL_MS = 15 * 60 * 1000; // 15 minutes of inactivity before code expiration
 const SIGNAL_TTL_MS = 2 * 60 * 1000; // 2 minutes for queued signals
@@ -41,6 +42,7 @@ setInterval(() => {
       devicesByCode.delete(code);
       devicesById.delete(device.deviceId);
       signalMailbox.delete(device.deviceId);
+      sseClients.delete(device.deviceId);
     }
   }
 
@@ -191,6 +193,18 @@ async function startServer() {
       timestamp: Date.now(),
     };
 
+    // Instant SSE push if target device has active SSE listeners
+    const targetClients = sseClients.get(toDeviceId);
+    if (targetClients && targetClients.size > 0) {
+      const payload = `data: ${JSON.stringify(envelope)}\n\n`;
+      targetClients.forEach((clientRes) => {
+        try {
+          clientRes.write(payload);
+        } catch {}
+      });
+    }
+
+    // Also queue in mailbox for poll drainage and reliable delivery
     const targetQueue = signalMailbox.get(toDeviceId) || [];
     targetQueue.push(envelope);
     signalMailbox.set(toDeviceId, targetQueue);
@@ -198,7 +212,65 @@ async function startServer() {
     res.json({ success: true, signalId: envelope.id });
   });
 
-  // 5. Poll for signals addressed to deviceId
+  // 5. Server-Sent Events (SSE) stream for zero-latency instant signaling
+  app.get("/api/signal/events", (req, res) => {
+    const deviceId = req.query.deviceId as string;
+    if (!deviceId) return res.status(400).json({ error: "Missing deviceId query parameter" });
+
+    // Refresh lastSeen
+    const reg = devicesById.get(deviceId);
+    if (reg) {
+      reg.lastSeen = Date.now();
+    }
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+
+    res.write(`: connected\n\n`);
+
+    // Register SSE client
+    let clientSet = sseClients.get(deviceId);
+    if (!clientSet) {
+      clientSet = new Set();
+      sseClients.set(deviceId, clientSet);
+    }
+    clientSet.add(res);
+
+    // Flush any pending mailbox signals immediately
+    const queued = signalMailbox.get(deviceId) || [];
+    if (queued.length > 0) {
+      signalMailbox.set(deviceId, []);
+      for (const env of queued) {
+        res.write(`data: ${JSON.stringify(env)}\n\n`);
+      }
+    }
+
+    // Keepalive ping every 15s to prevent proxy timeouts
+    const keepAliveTimer = setInterval(() => {
+      try {
+        res.write(`: ping\n\n`);
+      } catch {
+        clearInterval(keepAliveTimer);
+      }
+    }, 15000);
+
+    req.on("close", () => {
+      clearInterval(keepAliveTimer);
+      const currentSet = sseClients.get(deviceId);
+      if (currentSet) {
+        currentSet.delete(res);
+        if (currentSet.size === 0) {
+          sseClients.delete(deviceId);
+        }
+      }
+    });
+  });
+
+  // 6. Poll for signals addressed to deviceId (Fallback)
   app.get("/api/signal/poll", (req, res) => {
     const deviceId = req.query.deviceId as string;
     if (!deviceId) return res.status(400).json({ error: "Missing deviceId query parameter" });
@@ -220,13 +292,24 @@ async function startServer() {
     });
   });
 
-  // 6. Secure ICE Server configuration endpoint
-  // STUN pool is returned by default for pure LAN / Direct P2P testing without requiring TURN.
-  // If server-side TURN credentials are later provided (TURN_SERVER_URL, TURN_USERNAME, etc.),
-  // they are securely delivered via this backend route without exposing credentials in client bundle files.
+  // 7. Secure ICE Server configuration endpoint
+  // STUN pool is returned by default for direct P2P testing without requiring TURN.
   const getServerIceServers = () => {
-    const stunString = process.env.STUN_SERVERS || process.env.VITE_STUN_SERVERS || "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302,stun:stun2.l.google.com:19302";
-    const stunUrls = stunString.split(",").map((s) => s.trim()).filter(Boolean);
+    const defaultStuns = [
+      "stun:stun.l.google.com:19302",
+      "stun:stun1.l.google.com:19302",
+      "stun:stun2.l.google.com:19302",
+      "stun:stun3.l.google.com:19302",
+      "stun:stun4.l.google.com:19302",
+      "stun:stun.cloudflare.com:3478",
+      "stun:stun.services.mozilla.com",
+    ];
+
+    const stunString = process.env.STUN_SERVERS || process.env.VITE_STUN_SERVERS;
+    const stunUrls = stunString
+      ? stunString.split(",").map((s) => s.trim()).filter(Boolean)
+      : defaultStuns;
+
     const iceServers: any[] = stunUrls.map((url) => ({ urls: url }));
 
     const turnUrl = process.env.TURN_SERVER_URL || process.env.TURN_URL;
@@ -241,6 +324,7 @@ async function startServer() {
 
     return iceServers;
   };
+
 
   app.get("/api/signal/ice-servers", (req, res) => {
     res.json({
