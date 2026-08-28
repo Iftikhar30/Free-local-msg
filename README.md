@@ -35,10 +35,6 @@ Connect your devices. Share messages. No account required.
 
 <br>
 
-<img src="https://placehold.co/1200x650/0f172a/ffffff?text=LocalLink+Dashboard+Preview" alt="LocalLink Preview" width="90%">
-
-<br><br>
-
 > Built with **Google AI Studio**
 >
 > A lightweight, browser-based application for connecting multiple devices through WebRTC peer-to-peer communication.
