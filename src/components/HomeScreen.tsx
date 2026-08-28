@@ -70,7 +70,7 @@ export function HomeScreen({
   useEffect(() => {
     // Only check and show banner if supported and not dismissed
     if (PushNotificationService.isSupported()) {
-      PushNotificationService.getStatus().then((status) => {
+      PushNotificationService.getStatus(deviceInfo.deviceId, deviceInfo.deviceName).then((status) => {
         const isDismissed = localStorage.getItem("locallink_push_banner_dismissed");
         if (!status.isSubscribed && status.permission !== "denied" && !isDismissed) {
           setShowPushBanner(true);

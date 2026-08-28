@@ -1,4 +1,5 @@
 import express from "express";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
@@ -59,6 +60,35 @@ const devicesById = new Map<string, DeviceRegistration>();
 const signalMailbox = new Map<string, SignalEnvelope[]>(); // toDeviceId -> signals[]
 const sseClients = new Map<string, Set<express.Response>>(); // deviceId -> Set of open SSE responses
 const pushSubscriptions = new Map<string, PushSubscriptionRecord>(); // deviceId -> PushSubscriptionRecord
+
+const SUBSCRIPTIONS_FILE = path.join(process.cwd(), ".push_subscriptions.json");
+
+// Load persistent push subscriptions from file on startup
+try {
+  if (fs.existsSync(SUBSCRIPTIONS_FILE)) {
+    const raw = fs.readFileSync(SUBSCRIPTIONS_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        if (item && item.deviceId && item.subscription) {
+          pushSubscriptions.set(item.deviceId, item);
+        }
+      }
+      console.log(`[LocalLink] Restored ${pushSubscriptions.size} push subscriptions from disk.`);
+    }
+  }
+} catch (err) {
+  console.warn("[LocalLink] Could not read push subscriptions file:", err);
+}
+
+function saveSubscriptionsToDisk() {
+  try {
+    const list = Array.from(pushSubscriptions.values());
+    fs.writeFileSync(SUBSCRIPTIONS_FILE, JSON.stringify(list, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("[LocalLink] Could not persist push subscriptions:", err);
+  }
+}
 
 const CODE_TTL_MS = 15 * 60 * 1000; // 15 minutes of inactivity before code expiration
 const SIGNAL_TTL_MS = 2 * 60 * 1000; // 2 minutes for queued signals
@@ -255,7 +285,7 @@ async function startServer() {
     };
 
     // Trigger Web Push Notification if recipient might be in background or has app closed
-    if (type === "connect_request") {
+    if (type === "connect_request" || type === "connect") {
       sendPushNotification(toDeviceId, {
         title: `🔗 Connection Request: ${fromDeviceName}`,
         body: `${fromDeviceName} wants to connect with your device. Tap to accept.`,
@@ -263,19 +293,24 @@ async function startServer() {
         peerId: fromDeviceId,
         url: `/?connect=${fromDeviceId}`,
       });
-    } else if (type === "call_request" || (type === "offer" && data?.callId)) {
+    } else if (
+      type === "call_request" ||
+      type === "call" ||
+      type === "voice_call" ||
+      (type === "offer" && (data?.callId || data?.isCall))
+    ) {
       sendPushNotification(toDeviceId, {
-        title: `📞 Incoming Voice Call: ${fromDeviceName}`,
-        body: `Incoming encrypted voice call from ${fromDeviceName}. Tap to answer.`,
+        title: `📞 Incoming Call from ${fromDeviceName}`,
+        body: `Incoming voice call from ${fromDeviceName}. Tap to answer.`,
         type: "call",
-        callId: data?.callId || "",
+        callId: data?.callId || `call_${Date.now()}`,
         peerId: fromDeviceId,
         url: `/?call=${data?.callId || ""}&peer=${fromDeviceId}`,
       });
-    } else if (type === "chat_message") {
+    } else if (type === "chat_message" || type === "message" || type === "chat" || type === "file") {
       sendPushNotification(toDeviceId, {
         title: `💬 Message from ${fromDeviceName}`,
-        body: data?.text || "Sent you a message or attachment.",
+        body: data?.text || data?.fileName ? `Sent file: ${data.fileName}` : "Sent you a message.",
         type: "message",
         peerId: fromDeviceId,
         url: `/?peer=${fromDeviceId}`,
@@ -307,6 +342,7 @@ async function startServer() {
       subscription,
       timestamp: Date.now(),
     });
+    saveSubscriptionsToDisk();
 
     console.log(`[LocalLink] Registered Web Push Subscription for device ${deviceId} (${deviceName || "Unnamed"})`);
     res.json({ success: true, registered: true });
@@ -317,25 +353,37 @@ async function startServer() {
     const { deviceId } = req.body;
     if (deviceId) {
       pushSubscriptions.delete(deviceId);
+      saveSubscriptionsToDisk();
     }
     res.json({ success: true, unsubscribed: true });
   });
 
   // D. Send Test Push Notification
   app.post("/api/push/test", async (req, res) => {
-    const { deviceId } = req.body;
-    if (!deviceId) return res.status(400).json({ error: "Missing deviceId" });
+    const { deviceId, subscription } = req.body;
+    if (!deviceId && !subscription) return res.status(400).json({ error: "Missing deviceId or subscription" });
 
-    const record = pushSubscriptions.get(deviceId);
-    if (!record) {
+    if (deviceId && subscription && subscription.endpoint) {
+      pushSubscriptions.set(deviceId, {
+        deviceId,
+        subscription,
+        timestamp: Date.now(),
+      });
+      saveSubscriptionsToDisk();
+    }
+
+    const record = deviceId ? pushSubscriptions.get(deviceId) : null;
+    const targetSub = record?.subscription || subscription;
+
+    if (!targetSub || !targetSub.endpoint) {
       return res.status(404).json({
-        error: "No push subscription registered for this device. Please enable notifications first.",
+        error: "No push subscription registered for this device. Please turn on push notifications first.",
       });
     }
 
     try {
       await webpush.sendNotification(
-        record.subscription,
+        targetSub,
         JSON.stringify({
           title: "🔔 LocalLink Notification Test",
           body: "Push Notifications are working! You will receive calls and messages even if this tab is closed.",
@@ -345,7 +393,8 @@ async function startServer() {
       );
       res.json({ success: true, message: "Test notification sent successfully" });
     } catch (err: any) {
-      res.status(500).json({ error: "Failed to send test push notification: " + err.message });
+      console.warn("[LocalLink] Test push error:", err.message);
+      res.status(500).json({ error: "Push delivery failed: " + (err.message || "Unknown error") });
     }
   });
 
@@ -355,7 +404,7 @@ async function startServer() {
     if (!toDeviceId) return res.status(400).json({ error: "Missing toDeviceId" });
 
     const record = pushSubscriptions.get(toDeviceId);
-    if (!record) {
+    if (!record || !record.subscription) {
       return res.json({ success: false, notRegistered: true });
     }
 
@@ -369,24 +418,27 @@ async function startServer() {
     if (type === "call") {
       payload = {
         title: `📞 Incoming Call from ${fromDeviceName || "Peer"}`,
-        body: "Tap to answer incoming voice call on LocalLink",
+        body: `Incoming voice call from ${fromDeviceName || "Peer"}. Tap to answer.`,
         type: "call",
         callId,
-        url: `/?call=${callId || ""}`,
+        peerId: req.body.fromDeviceId,
+        url: `/?call=${callId || ""}&peer=${req.body.fromDeviceId || ""}`,
       };
     } else if (type === "message") {
       payload = {
-        title: `💬 Message from ${fromDeviceName || "Peer"}`,
+        title: `💬 ${fromDeviceName || "Peer"}`,
         body: text || "Sent you a message.",
         type: "message",
-        url: "/",
+        peerId: req.body.fromDeviceId,
+        url: `/?peer=${req.body.fromDeviceId || ""}`,
       };
     } else if (type === "connect") {
       payload = {
         title: `🔗 Connection Request from ${fromDeviceName || "Peer"}`,
-        body: "Wants to connect with your device.",
+        body: "Wants to connect with your device. Tap to accept.",
         type: "connect",
-        url: "/",
+        peerId: req.body.fromDeviceId,
+        url: `/?connect=${req.body.fromDeviceId || ""}`,
       };
     }
 
@@ -394,6 +446,10 @@ async function startServer() {
       await webpush.sendNotification(record.subscription, JSON.stringify(payload));
       res.json({ success: true });
     } catch (err: any) {
+      if (err.statusCode === 404 || err.statusCode === 410) {
+        pushSubscriptions.delete(toDeviceId);
+        saveSubscriptionsToDisk();
+      }
       res.json({ success: false, error: err.message });
     }
   });

@@ -19,6 +19,7 @@ import {
   setStoredDeviceName,
 } from "../services/device";
 import { MessagingService } from "../services/messaging";
+import { PushNotificationService } from "../services/pushNotification";
 import { SignalingClient } from "../services/signaling";
 import { WebRTCManager } from "../services/webrtc";
 import {
@@ -283,6 +284,9 @@ export function useLocalLink() {
       handleIncomingSignal(signal);
     });
 
+    // Auto-sync push notification subscription with server on mount
+    PushNotificationService.getStatus(deviceInfo.deviceId, deviceInfo.deviceName).catch(() => {});
+
     // Handle online/offline network reconnection
     const handleOnline = () => {
       signaling.register(connectionCode);
@@ -463,6 +467,13 @@ export function useLocalLink() {
       os: env.os,
     });
 
+    // Also send Web Push Notification alert
+    PushNotificationService.notifyPeer(target.deviceId, {
+      type: "connect",
+      fromDeviceId: deviceInfo.deviceId,
+      fromDeviceName: deviceInfo.deviceName,
+    }).catch(() => {});
+
     return { success: true };
   };
 
@@ -599,6 +610,14 @@ export function useLocalLink() {
         return next;
       });
 
+      // Background Web Push Notification to peer
+      PushNotificationService.notifyPeer(peerId, {
+        type: "message",
+        fromDeviceId: deviceInfo.deviceId,
+        fromDeviceName: deviceInfo.deviceName,
+        text,
+      }).catch(() => {});
+
       return true;
     } catch (err) {
       console.error("Failed to send message:", err);
@@ -627,6 +646,14 @@ export function useLocalLink() {
         }
         return next;
       });
+
+      // Background Web Push Notification for incoming file
+      PushNotificationService.notifyPeer(peerId, {
+        type: "message",
+        fromDeviceId: deviceInfo.deviceId,
+        fromDeviceName: deviceInfo.deviceName,
+        text: `📁 Sent a file: ${file.name}`,
+      }).catch(() => {});
 
       return msg;
     } catch (err) {
@@ -667,6 +694,14 @@ export function useLocalLink() {
         return next;
       });
 
+      // Background Web Push Notification for voice message
+      PushNotificationService.notifyPeer(peerId, {
+        type: "message",
+        fromDeviceId: deviceInfo.deviceId,
+        fromDeviceName: deviceInfo.deviceName,
+        text: "🎤 Sent you a voice message",
+      }).catch(() => {});
+
       return msg;
     } catch (err) {
       console.error("Failed to send voice message:", err);
@@ -678,6 +713,14 @@ export function useLocalLink() {
   const startVoiceCall = async (peerId: string): Promise<boolean> => {
     const peer = peers.get(peerId);
     if (!peer || !voiceCallServiceRef.current) return false;
+    
+    // Background Web Push Notification to alert receiver of incoming call
+    PushNotificationService.notifyPeer(peerId, {
+      type: "call",
+      fromDeviceId: deviceInfo.deviceId,
+      fromDeviceName: deviceInfo.deviceName,
+    }).catch(() => {});
+
     return await voiceCallServiceRef.current.startCall(peerId, peer.deviceName, peer.deviceType);
   };
 

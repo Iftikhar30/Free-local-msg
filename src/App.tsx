@@ -93,7 +93,13 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-20 md:pb-8">
+      <main
+        className={`w-full mx-auto ${
+          activeTab === "chat"
+            ? "flex-1 max-w-7xl px-0 sm:px-4 md:px-6 lg:px-8 py-0 sm:pt-4 md:pt-6 pb-14 md:pb-8 flex flex-col min-h-0 h-[calc(100dvh-56px)] md:h-auto overflow-hidden md:overflow-visible"
+            : "flex-1 max-w-7xl px-4 sm:px-6 lg:px-8 pt-6 pb-20 md:pb-8"
+        }`}
+      >
         {activeTab === "home" && (
           <HomeScreen
             deviceInfo={deviceInfo}

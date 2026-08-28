@@ -1,1 +1,33 @@
 @import "tailwindcss";
+
+/* Ensure smooth mobile touch scrolling and viewport safety */
+@layer utilities {
+  .touch-pan-y {
+    touch-action: pan-y;
+  }
+  .overscroll-contain {
+    overscroll-behavior: contain;
+  }
+  .webkit-overflow-touch {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Custom modern scrollbar for chat message lists */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.7);
+}

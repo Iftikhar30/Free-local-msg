@@ -60,7 +60,7 @@ export class PushNotificationService {
     }
   }
 
-  public static async getStatus(): Promise<PushNotificationConfig> {
+  public static async getStatus(deviceId?: string, deviceName?: string): Promise<PushNotificationConfig> {
     const supported = this.isSupported();
     if (!supported) {
       return { supported: false, permission: "denied", isSubscribed: false };
@@ -74,6 +74,19 @@ export class PushNotificationService {
       if (reg) {
         const sub = await reg.pushManager.getSubscription();
         isSubscribed = !!sub && permission === "granted";
+
+        // Auto-sync subscription with server in the background if active
+        if (isSubscribed && sub && deviceId) {
+          fetch("/api/push/subscribe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              deviceId,
+              deviceName: deviceName || "Device",
+              subscription: sub.toJSON(),
+            }),
+          }).catch(() => {});
+        }
       }
     } catch {
       isSubscribed = false;
@@ -90,10 +103,13 @@ export class PushNotificationService {
     try {
       const res = await fetch("/api/push/vapid-public-key");
       if (res.ok) {
-        const data = await res.json();
-        if (data.publicKey && typeof data.publicKey === "string" && data.publicKey.length > 20) {
-          return data.publicKey;
-        }
+        const text = await res.text();
+        try {
+          const data = JSON.parse(text);
+          if (data.publicKey && typeof data.publicKey === "string" && data.publicKey.length > 20) {
+            return data.publicKey;
+          }
+        } catch {}
       }
     } catch (err) {
       console.warn("Could not fetch remote VAPID key, using default:", err);
@@ -158,9 +174,16 @@ export class PushNotificationService {
         }),
       });
 
+      let resData: any = {};
+      try {
+        const text = await res.text();
+        resData = text ? JSON.parse(text) : {};
+      } catch {
+        resData = {};
+      }
+
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        return { success: false, error: errData.error || "Failed to register push subscription on server." };
+        return { success: false, error: resData.error || "Failed to register push subscription on server." };
       }
 
       localStorage.setItem(PUSH_PREF_KEY, "true");
@@ -197,15 +220,37 @@ export class PushNotificationService {
 
   public static async sendTestNotification(deviceId: string): Promise<{ success: boolean; error?: string }> {
     try {
+      // Get current local subscription to pass directly
+      let subJson: any = null;
+      try {
+        const reg = await this.registerServiceWorker();
+        if (reg) {
+          const sub = await reg.pushManager.getSubscription();
+          if (sub) {
+            subJson = sub.toJSON();
+          }
+        }
+      } catch {}
+
       const res = await fetch("/api/push/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deviceId }),
+        body: JSON.stringify({
+          deviceId,
+          subscription: subJson,
+        }),
       });
 
-      const data = await res.json();
+      let data: any = {};
+      try {
+        const text = await res.text();
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        return { success: false, error: `Server error (${res.status}). Please try again.` };
+      }
+
       if (!res.ok || !data.success) {
-        return { success: false, error: data.error || "Failed to send test push notification." };
+        return { success: false, error: data.error || `Failed with status ${res.status}` };
       }
       return { success: true };
     } catch (err: any) {
@@ -217,6 +262,7 @@ export class PushNotificationService {
     toDeviceId: string,
     payload: {
       type: "call" | "message" | "connect";
+      fromDeviceId?: string;
       fromDeviceName: string;
       text?: string;
       callId?: string;

@@ -62,13 +62,13 @@ export function SettingsScreen({
 
   useEffect(() => {
     // Check initial push notification configuration
-    PushNotificationService.getStatus().then(setPushConfig);
+    PushNotificationService.getStatus(deviceInfo.deviceId, deviceInfo.deviceName).then(setPushConfig);
 
     const savedIce = getCustomIceServers();
     if (savedIce.length > 0) {
       setIceServerInput(JSON.stringify(savedIce, null, 2));
     }
-  }, []);
+  }, [deviceInfo.deviceId, deviceInfo.deviceName]);
 
   const handleTogglePushNotifications = async () => {
     setIsPushLoading(true);
@@ -78,13 +78,13 @@ export function SettingsScreen({
       if (pushConfig.isSubscribed) {
         // Unsubscribe
         await PushNotificationService.unsubscribe(deviceInfo.deviceId);
-        const next = await PushNotificationService.getStatus();
+        const next = await PushNotificationService.getStatus(deviceInfo.deviceId, deviceInfo.deviceName);
         setPushConfig(next);
         setPushStatusMessage("Push notifications have been disabled.");
       } else {
         // Subscribe
         const res = await PushNotificationService.subscribe(deviceInfo.deviceId, deviceInfo.deviceName);
-        const next = await PushNotificationService.getStatus();
+        const next = await PushNotificationService.getStatus(deviceInfo.deviceId, deviceInfo.deviceName);
         setPushConfig(next);
         if (res.success) {
           setPushStatusMessage("Push notifications activated! You will receive calls & messages even when the app is closed.");
