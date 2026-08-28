@@ -1,8 +1,10 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ArrowRight,
+  Bell,
   Camera,
   Check,
+  CheckCircle2,
   Copy,
   Edit2,
   Info,
@@ -13,8 +15,10 @@ import {
   RefreshCw,
   Smartphone,
   Wifi,
+  X,
 } from "lucide-react";
 import { ConnectedPeer, DeviceInfo, IncomingConnectionRequest } from "../types";
+import { PushNotificationService } from "../services/pushNotification";
 
 interface HomeScreenProps {
   deviceInfo: DeviceInfo;
@@ -57,6 +61,38 @@ export function HomeScreen({
   const [copied, setCopied] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const [editNameInput, setEditNameInput] = useState(deviceInfo.deviceName);
+
+  // Push Notification Prompt
+  const [showPushBanner, setShowPushBanner] = useState(false);
+  const [pushEnabling, setPushEnabling] = useState(false);
+  const [pushSuccess, setPushSuccess] = useState(false);
+
+  useEffect(() => {
+    // Only check and show banner if supported and not dismissed
+    if (PushNotificationService.isSupported()) {
+      PushNotificationService.getStatus().then((status) => {
+        const isDismissed = localStorage.getItem("locallink_push_banner_dismissed");
+        if (!status.isSubscribed && status.permission !== "denied" && !isDismissed) {
+          setShowPushBanner(true);
+        }
+      });
+    }
+  }, []);
+
+  const handleEnablePush = async () => {
+    setPushEnabling(true);
+    const res = await PushNotificationService.subscribe(deviceInfo.deviceId, deviceInfo.deviceName);
+    setPushEnabling(false);
+    if (res.success) {
+      setPushSuccess(true);
+      setTimeout(() => setShowPushBanner(false), 3000);
+    }
+  };
+
+  const handleDismissPush = () => {
+    setShowPushBanner(false);
+    localStorage.setItem("locallink_push_banner_dismissed", "true");
+  };
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(connectionCode);
@@ -113,6 +149,57 @@ export function HomeScreen({
           <Info className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
           <div className="flex-1">
             <span className="font-semibold">Signaling Server:</span> {signalingError}.
+          </div>
+        </div>
+      )}
+
+      {/* Background Push Notification Prompt Banner */}
+      {showPushBanner && (
+        <div className="max-w-3xl mx-auto rounded-2xl bg-linear-to-r from-indigo-900 to-slate-900 border border-indigo-500/40 p-4 text-white shadow-lg flex flex-col sm:flex-row items-center justify-between gap-3 relative animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center gap-3 w-full sm:w-auto">
+            <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-md">
+              <Bell className="w-5 h-5 animate-bounce" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <span>Enable Background Notifications</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-indigo-500/30 text-indigo-200 border border-indigo-400/30 font-normal">
+                  Recommended
+                </span>
+              </h3>
+              <p className="text-xs text-indigo-200/90 mt-0.5">
+                Receive calls & messages even when this tab is closed or your phone screen is off.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+            {pushSuccess ? (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-xs font-semibold">
+                <CheckCircle2 className="w-4 h-4" />
+                <span>Notifications Active!</span>
+              </div>
+            ) : (
+              <button
+                type="button"
+                id="enable-push-banner-btn"
+                disabled={pushEnabling}
+                onClick={handleEnablePush}
+                className="flex-1 sm:flex-none px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-bold shadow-md active:scale-95 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {pushEnabling ? "Activating..." : "Turn On Notifications"}
+              </button>
+            )}
+
+            <button
+              type="button"
+              id="dismiss-push-banner-btn"
+              onClick={handleDismissPush}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+              title="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
         </div>
       )}

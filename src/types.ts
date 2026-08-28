@@ -99,7 +99,22 @@ export interface ActiveCallState {
   startTime?: number;
   duration: number; // in seconds
   isMuted: boolean;
+  isSpeakerOn?: boolean;
   isRemoteMuted?: boolean;
+}
+
+export interface PushSubscriptionPayload {
+  endpoint: string;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+}
+
+export interface PushNotificationConfig {
+  supported: boolean;
+  permission: NotificationPermission;
+  isSubscribed: boolean;
 }
 
 export type DataPacketType =

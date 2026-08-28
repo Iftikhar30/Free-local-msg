@@ -1,6 +1,6 @@
 {
   "name": "LocalLink",
-  "description": "Peer-to-peer multi-device direct messaging and connection app powered by WebRTC, live QR scanning, and Vercel-compatible signaling.",
+  "description": "Direct peer-to-peer messaging, encrypted voice calls with loudspeaker mode, voice notes, WhatsApp-style in-app file previews, and background push notifications.",
   "requestFramePermissions": ["camera", "microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

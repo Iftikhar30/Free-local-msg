@@ -18,9 +18,10 @@ import {
   VolumeX,
   Zap,
 } from "lucide-react";
-import { DeviceInfo } from "../types";
+import { DeviceInfo, PushNotificationConfig } from "../types";
 import { clearAllStorage, getCustomIceServers, setCustomIceServers } from "../services/device";
 import { playMessageSound } from "../services/sound";
+import { PushNotificationService } from "../services/pushNotification";
 
 interface SettingsScreenProps {
   deviceInfo: DeviceInfo;
@@ -46,16 +47,72 @@ export function SettingsScreen({
   const [nameInput, setNameInput] = useState(deviceInfo.deviceName);
   const [nameSaved, setNameSaved] = useState(false);
 
+  // Push Notifications state
+  const [pushConfig, setPushConfig] = useState<PushNotificationConfig>({
+    supported: false,
+    permission: "default",
+    isSubscribed: false,
+  });
+  const [isPushLoading, setIsPushLoading] = useState(false);
+  const [pushStatusMessage, setPushStatusMessage] = useState<string | null>(null);
+
   // Custom ICE servers
   const [iceServerInput, setIceServerInput] = useState("");
   const [iceSaved, setIceSaved] = useState(false);
 
   useEffect(() => {
+    // Check initial push notification configuration
+    PushNotificationService.getStatus().then(setPushConfig);
+
     const savedIce = getCustomIceServers();
     if (savedIce.length > 0) {
       setIceServerInput(JSON.stringify(savedIce, null, 2));
     }
   }, []);
+
+  const handleTogglePushNotifications = async () => {
+    setIsPushLoading(true);
+    setPushStatusMessage(null);
+
+    try {
+      if (pushConfig.isSubscribed) {
+        // Unsubscribe
+        await PushNotificationService.unsubscribe(deviceInfo.deviceId);
+        const next = await PushNotificationService.getStatus();
+        setPushConfig(next);
+        setPushStatusMessage("Push notifications have been disabled.");
+      } else {
+        // Subscribe
+        const res = await PushNotificationService.subscribe(deviceInfo.deviceId, deviceInfo.deviceName);
+        const next = await PushNotificationService.getStatus();
+        setPushConfig(next);
+        if (res.success) {
+          setPushStatusMessage("Push notifications activated! You will receive calls & messages even when the app is closed.");
+        } else {
+          setPushStatusMessage(res.error || "Failed to enable notifications.");
+        }
+      }
+    } catch (err: any) {
+      setPushStatusMessage(err.message || "Failed to update notification settings.");
+    } finally {
+      setIsPushLoading(false);
+      setTimeout(() => setPushStatusMessage(null), 5000);
+    }
+  };
+
+  const handleSendTestPush = async () => {
+    setIsPushLoading(true);
+    setPushStatusMessage(null);
+
+    const res = await PushNotificationService.sendTestNotification(deviceInfo.deviceId);
+    setIsPushLoading(false);
+    if (res.success) {
+      setPushStatusMessage("Test notification sent! Check your device status bar / lockscreen.");
+    } else {
+      setPushStatusMessage(res.error || "Failed to send test push notification.");
+    }
+    setTimeout(() => setPushStatusMessage(null), 5000);
+  };
 
   const handleSaveName = (e: React.FormEvent) => {
     e.preventDefault();
@@ -178,7 +235,82 @@ export function SettingsScreen({
         </form>
       </div>
 
-      {/* 2. Notification & Sound Settings */}
+      {/* 2. Background Push Notifications (Web Push API) */}
+      <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-2xs">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+          <div className="flex items-center gap-2">
+            <div className="p-1 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400">
+              <Bell className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-900 dark:text-white text-xs uppercase tracking-wider">
+                Background Push Notifications
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Receive calls and messages even if the app or browser tab is closed
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            id="toggle-push-btn"
+            disabled={isPushLoading || !pushConfig.supported}
+            onClick={handleTogglePushNotifications}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none disabled:opacity-50 ${
+              pushConfig.isSubscribed ? "bg-indigo-600" : "bg-slate-300 dark:bg-slate-700"
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                pushConfig.isSubscribed ? "translate-x-5" : "translate-x-0"
+              }`}
+            />
+          </button>
+        </div>
+
+        <div className="mt-3 space-y-2.5">
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-500 dark:text-slate-400">Status:</span>
+              {pushConfig.isSubscribed ? (
+                <span className="inline-flex items-center gap-1 font-semibold text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Active & Subscribed</span>
+                </span>
+              ) : pushConfig.permission === "denied" ? (
+                <span className="font-semibold text-rose-500">Permission Blocked in Browser</span>
+              ) : (
+                <span className="font-medium text-slate-500 dark:text-slate-400">Disabled</span>
+              )}
+            </div>
+
+            {pushConfig.isSubscribed && (
+              <button
+                type="button"
+                id="send-test-push-btn"
+                disabled={isPushLoading}
+                onClick={handleSendTestPush}
+                className="px-2.5 py-1 rounded-md bg-indigo-50 dark:bg-indigo-950/80 hover:bg-indigo-100 dark:hover:bg-indigo-900/80 text-indigo-700 dark:text-indigo-300 font-semibold text-[11px] transition-colors disabled:opacity-50"
+              >
+                <span>Send Test Notification</span>
+              </button>
+            )}
+          </div>
+
+          {pushStatusMessage && (
+            <div className="p-2 rounded-lg bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200/60 dark:border-indigo-800/60 text-xs text-indigo-900 dark:text-indigo-200 animate-in fade-in duration-150">
+              {pushStatusMessage}
+            </div>
+          )}
+
+          <p className="text-[10px] text-slate-400 dark:text-slate-500">
+            Uses standard W3C Web Push & Service Worker protocols. When your phone screen is off or you switch apps, incoming calls ring and show notifications.
+          </p>
+        </div>
+      </div>
+
+      {/* 3. Notification & Sound Settings */}
       <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 shadow-2xs">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">

@@ -22,6 +22,7 @@ interface VoiceCallModalProps {
   onEndCall?: () => void;
   onEnd?: () => void;
   onToggleMute: () => void;
+  onToggleSpeaker?: () => void;
 }
 
 export function VoiceCallModal({
@@ -31,6 +32,7 @@ export function VoiceCallModal({
   onEndCall,
   onEnd,
   onToggleMute,
+  onToggleSpeaker,
 }: VoiceCallModalProps) {
   const handleEnd = onEndCall || onEnd || (() => {});
   const formatDuration = (seconds: number) => {
@@ -179,9 +181,9 @@ export function VoiceCallModal({
             </div>
           )}
 
-          {/* In-Call Active Controls: Mute Toggle & End Call */}
+          {/* In-Call Active Controls: Mute Toggle, Loudspeaker Toggle & End Call */}
           {call.status === "connected" && (
-            <div className="flex items-center justify-center gap-6">
+            <div className="flex items-center justify-center gap-5">
               {/* Mute Button */}
               <div className="flex flex-col items-center gap-1.5">
                 <button
@@ -189,15 +191,36 @@ export function VoiceCallModal({
                   onClick={onToggleMute}
                   className={`w-12 h-12 rounded-full flex items-center justify-center transition-all cursor-pointer ${
                     call.isMuted
-                      ? "bg-rose-500/20 border border-rose-500 text-rose-400"
+                      ? "bg-rose-500/20 border border-rose-500 text-rose-400 shadow-md shadow-rose-950/40"
                       : "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
                   }`}
                   title={call.isMuted ? "Unmute Microphone" : "Mute Microphone"}
                 >
                   {call.isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
                 </button>
-                <span className="text-[11px] text-slate-400">
+                <span className="text-[11px] text-slate-400 font-medium">
                   {call.isMuted ? "Unmute" : "Mute"}
+                </span>
+              </div>
+
+              {/* Loudspeaker / Speakerphone Toggle Button */}
+              <div className="flex flex-col items-center gap-1.5">
+                <button
+                  id="toggle-speaker-btn"
+                  onClick={onToggleSpeaker}
+                  className={`w-12 h-12 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                    call.isSpeakerOn
+                      ? "bg-indigo-600 border border-indigo-400 text-white shadow-lg shadow-indigo-600/30 scale-105"
+                      : "bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                  }`}
+                  title={call.isSpeakerOn ? "Turn Speaker Off" : "Turn Loudspeaker On"}
+                >
+                  {call.isSpeakerOn ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+                </button>
+                <span className={`text-[11px] font-medium transition-colors ${
+                  call.isSpeakerOn ? "text-indigo-400 font-semibold" : "text-slate-400"
+                }`}>
+                  {call.isSpeakerOn ? "Speaker On" : "Speaker"}
                 </span>
               </div>
 

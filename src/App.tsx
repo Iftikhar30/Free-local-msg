@@ -50,6 +50,7 @@ export default function App() {
     rejectVoiceCall,
     endVoiceCall,
     toggleVoiceCallMute,
+    toggleVoiceCallSpeaker,
     cancelFileTransfer,
     sendTypingIndicator,
     openChatWithPeer,
@@ -210,6 +211,7 @@ export default function App() {
           onReject={rejectVoiceCall}
           onEnd={endVoiceCall}
           onToggleMute={toggleVoiceCallMute}
+          onToggleSpeaker={toggleVoiceCallSpeaker}
         />
       )}
     </div>

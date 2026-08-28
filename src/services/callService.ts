@@ -25,6 +25,10 @@ export class VoiceCallService {
   private callPeerConnection: RTCPeerConnection | null = null;
   private durationInterval: any = null;
   private audioElement: HTMLAudioElement | null = null;
+  private audioContext: AudioContext | null = null;
+  private gainNode: GainNode | null = null;
+  private compressorNode: DynamicsCompressorNode | null = null;
+  private sourceNode: MediaStreamAudioSourceNode | null = null;
 
   private pendingRemoteOffer: RTCSessionDescriptionInit | null = null;
   private pendingRemoteIceCandidates: RTCIceCandidateInit[] = [];
@@ -501,6 +505,69 @@ export class VoiceCallService {
     return false;
   }
 
+  // Toggle Loudspeaker / Speakerphone mode
+  public async toggleSpeaker(): Promise<boolean> {
+    if (!this.activeCall) return false;
+
+    const nextSpeakerState = !this.activeCall.isSpeakerOn;
+    this.activeCall = {
+      ...this.activeCall,
+      isSpeakerOn: nextSpeakerState,
+    };
+    this.callbacks.onCallStateChange(this.activeCall);
+
+    // 1. Adjust Web Audio gain amplification
+    if (this.gainNode && this.audioContext) {
+      const targetGain = nextSpeakerState ? 2.5 : 1.0;
+      try {
+        this.gainNode.gain.cancelScheduledValues(this.audioContext.currentTime);
+        this.gainNode.gain.linearRampToValueAtTime(targetGain, this.audioContext.currentTime + 0.1);
+      } catch {
+        this.gainNode.gain.value = targetGain;
+      }
+    }
+
+    // 2. Hardware speaker device selection via setSinkId if supported by browser
+    if (this.audioElement && typeof (this.audioElement as any).setSinkId === "function") {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioOutputs = devices.filter((d) => d.kind === "audiooutput");
+
+        if (nextSpeakerState) {
+          // Look for speaker device
+          const speaker = audioOutputs.find(
+            (d) =>
+              d.label.toLowerCase().includes("speaker") ||
+              d.label.toLowerCase().includes("lautsprecher") ||
+              d.label.toLowerCase().includes("haut-parleur") ||
+              d.deviceId === "default"
+          );
+          if (speaker && speaker.deviceId) {
+            await (this.audioElement as any).setSinkId(speaker.deviceId);
+          }
+        } else {
+          // Look for communications / earpiece / default device
+          const receiver = audioOutputs.find(
+            (d) =>
+              d.label.toLowerCase().includes("earpiece") ||
+              d.label.toLowerCase().includes("receiver") ||
+              d.label.toLowerCase().includes("headset") ||
+              d.label.toLowerCase().includes("headphones")
+          );
+          if (receiver && receiver.deviceId) {
+            await (this.audioElement as any).setSinkId(receiver.deviceId);
+          } else if (audioOutputs.length > 0) {
+            await (this.audioElement as any).setSinkId("");
+          }
+        }
+      } catch (err) {
+        console.warn("setSinkId speaker route error:", err);
+      }
+    }
+
+    return nextSpeakerState;
+  }
+
   private attachRemoteAudio(stream: MediaStream) {
     if (typeof window === "undefined") return;
 
@@ -508,6 +575,7 @@ export class VoiceCallService {
       this.initAudioElement();
     }
 
+    // Connect stream to audio element
     if (this.audioElement) {
       this.audioElement.srcObject = stream;
       const playPromise = this.audioElement.play();
@@ -523,6 +591,45 @@ export class VoiceCallService {
           window.addEventListener("touchstart", unlock, { once: true });
         });
       }
+    }
+
+    // Connect Web Audio API graph for rich dynamic amplification and loudspeaker gain boost
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtx) {
+        if (!this.audioContext || this.audioContext.state === "closed") {
+          this.audioContext = new AudioCtx();
+        }
+        if (this.audioContext.state === "suspended") {
+          this.audioContext.resume().catch(() => {});
+        }
+
+        if (this.sourceNode) {
+          try {
+            this.sourceNode.disconnect();
+          } catch {}
+        }
+
+        this.sourceNode = this.audioContext.createMediaStreamSource(stream);
+        this.gainNode = this.audioContext.createGain();
+        this.compressorNode = this.audioContext.createDynamicsCompressor();
+
+        // Dynamics compressor settings to prevent harsh clipping when loudspeaker gain is boosted
+        this.compressorNode.threshold.setValueAtTime(-18, this.audioContext.currentTime);
+        this.compressorNode.knee.setValueAtTime(12, this.audioContext.currentTime);
+        this.compressorNode.ratio.setValueAtTime(4, this.audioContext.currentTime);
+        this.compressorNode.attack.setValueAtTime(0.003, this.audioContext.currentTime);
+        this.compressorNode.release.setValueAtTime(0.25, this.audioContext.currentTime);
+
+        const initialGain = this.activeCall?.isSpeakerOn ? 2.5 : 1.0;
+        this.gainNode.gain.setValueAtTime(initialGain, this.audioContext.currentTime);
+
+        this.sourceNode.connect(this.compressorNode);
+        this.compressorNode.connect(this.gainNode);
+        this.gainNode.connect(this.audioContext.destination);
+      }
+    } catch (e) {
+      console.warn("Web Audio Routing init non-critical error:", e);
     }
   }
 
@@ -571,6 +678,27 @@ export class VoiceCallService {
         this.audioElement.pause();
         this.audioElement.srcObject = null;
       } catch {}
+    }
+
+    if (this.sourceNode) {
+      try {
+        this.sourceNode.disconnect();
+      } catch {}
+      this.sourceNode = null;
+    }
+
+    if (this.gainNode) {
+      try {
+        this.gainNode.disconnect();
+      } catch {}
+      this.gainNode = null;
+    }
+
+    if (this.compressorNode) {
+      try {
+        this.compressorNode.disconnect();
+      } catch {}
+      this.compressorNode = null;
     }
 
     this.remoteStream = null;

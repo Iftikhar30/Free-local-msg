@@ -702,6 +702,11 @@ export function useLocalLink() {
     voiceCallServiceRef.current?.toggleMute();
   };
 
+  // Toggle loudspeaker / speakerphone
+  const toggleVoiceCallSpeaker = () => {
+    voiceCallServiceRef.current?.toggleSpeaker();
+  };
+
   // Cancel ongoing file transfer
   const cancelFileTransfer = (peerId: string, fileId: string) => {
     messagingServiceRef.current?.cancelFileTransfer(peerId, fileId);
@@ -790,6 +795,7 @@ export function useLocalLink() {
     rejectVoiceCall,
     endVoiceCall,
     toggleVoiceCallMute,
+    toggleVoiceCallSpeaker,
     cancelFileTransfer,
     sendTypingIndicator,
     openChatWithPeer,
