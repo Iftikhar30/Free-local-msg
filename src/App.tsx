@@ -70,6 +70,7 @@ export default function App() {
   }, []);
 
   const totalUnread = peersList.reduce((sum, p) => sum + p.unreadCount, 0);
+  const isChatActiveOnMobile = activeTab === "chat" && !!activePeer;
 
   const handleOpenChat = (peerId: string) => {
     openChatWithPeer(peerId);
@@ -77,26 +78,34 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+    <div
+      className={`bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors flex flex-col font-sans selection:bg-indigo-500 selection:text-white ${
+        activeTab === "chat"
+          ? "h-[100dvh] max-h-[100dvh] overflow-hidden"
+          : "min-h-screen"
+      }`}
+    >
       {/* Top Navigation */}
-      <Navbar
-        deviceInfo={deviceInfo}
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        connectedCount={peersList.filter((p) => p.status === "connected").length}
-        unreadTotal={totalUnread}
-        isSignalingReady={isSignalingReady}
-        onOpenConnectModal={() => setIsConnectModalOpen(true)}
-        onUpdateDeviceName={updateDeviceName}
-        soundEnabled={soundEnabled}
-        setSoundEnabled={setSoundEnabled}
-      />
+      <div className={isChatActiveOnMobile ? "hidden md:block shrink-0" : "shrink-0"}>
+        <Navbar
+          deviceInfo={deviceInfo}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          connectedCount={peersList.filter((p) => p.status === "connected").length}
+          unreadTotal={totalUnread}
+          isSignalingReady={isSignalingReady}
+          onOpenConnectModal={() => setIsConnectModalOpen(true)}
+          onUpdateDeviceName={updateDeviceName}
+          soundEnabled={soundEnabled}
+          setSoundEnabled={setSoundEnabled}
+        />
+      </div>
 
       {/* Main Content Area */}
       <main
         className={`w-full mx-auto ${
           activeTab === "chat"
-            ? "flex-1 max-w-7xl px-0 sm:px-4 md:px-6 lg:px-8 py-0 sm:pt-4 md:pt-6 pb-14 md:pb-8 flex flex-col min-h-0 h-[calc(100dvh-56px)] md:h-auto overflow-hidden md:overflow-visible"
+            ? "flex-1 min-h-0 w-full flex flex-col overflow-hidden max-w-7xl px-0 sm:px-3 md:px-6 lg:px-8 py-0 sm:py-2 md:py-4"
             : "flex-1 max-w-7xl px-4 sm:px-6 lg:px-8 pt-6 pb-20 md:pb-8"
         }`}
       >
@@ -177,6 +186,7 @@ export default function App() {
         setActiveTab={setActiveTab}
         connectedCount={peersList.filter((p) => p.status === "connected").length}
         unreadTotal={totalUnread}
+        hidden={isChatActiveOnMobile}
       />
 
       {/* Connect Device Modal (with manual code + QR Camera scanner) */}
